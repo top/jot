@@ -31,29 +31,17 @@ targets:
     settings:
       base:
         PRODUCT_NAME: Jot
-        PRODUCT_BUNDLE_IDENTIFIER: com.ammaar.jot
-        # Ammaar's PERSONAL Apple team. A personal open-source project must not
-        # be signed under Google LLC's team, in development or in distribution.
-        DEVELOPMENT_TEAM: 7S264298H8
-        CODE_SIGN_STYLE: Automatic
+        PRODUCT_BUNDLE_IDENTIFIER: org.ie9.app
+        DEVELOPMENT_TEAM: ""
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGNING_REQUIRED: NO
         CODE_SIGN_ENTITLEMENTS: App/Jot.entitlements
         ENABLE_HARDENED_RUNTIME: NO # enabled for notarized release builds (M8)
         SWIFT_VERSION: "5.10"
         MARKETING_VERSION: "0.4.0"
         CURRENT_PROJECT_VERSION: "9"
         MACOSX_DEPLOYMENT_TARGET: "14.0"
-      configs:
-        # A clean clone must build with no Apple account at all — ./scripts/build.sh
-        # is the README's first command and used to fail for everyone not on the
-        # team above with "No signing certificate found". Manual + "-" makes Debug
-        # sign ad-hoc, which never consults DEVELOPMENT_TEAM or a provisioning
-        # profile, so the team stays hardcoded and only Release depends on it.
-        # Ad-hoc still honours the entitlements file, so the mic prompt behaves.
-        # To build under your own team: ./scripts/build.sh DEVELOPMENT_TEAM=XXXXXXXXXX
-        Debug:
-          CODE_SIGN_IDENTITY: "-"
-          CODE_SIGN_STYLE: Manual
-          CODE_SIGNING_REQUIRED: NO
     sources:
       - path: App/Sources
       - path: App/Resources/Jot.icns
@@ -82,7 +70,7 @@ targets:
         NSHumanReadableCopyright: "Copyright 2026 Google LLC. Apache License 2.0. This is not an officially supported Google product."
         LSMinimumSystemVersion: "14.0"
         CFBundleURLTypes:
-          - CFBundleURLName: com.ammaar.jot.url
+          - CFBundleURLName: org.ie9.app.url
             CFBundleURLSchemes: [jot]
     scheme:
       testTargets: []

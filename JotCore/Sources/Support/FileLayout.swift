@@ -15,7 +15,7 @@
 import Foundation
 
 /// Where everything lives on disk. One folder per dictation, Superwhisper-proven
-/// layout: audio.caf (crash-safe master), audio.flac (upload copy, M3+), meta.json.
+/// layout: audio.caf (crash-safe master), audio.wav (temporary upload), meta.json.
 public enum FileLayout {
     /// Test hook: unit tests MUST sandbox here — the suite once wrote failed-
     /// session folders straight into the user's real History.
@@ -24,7 +24,7 @@ public enum FileLayout {
     public static var appSupportRoot: URL {
         if let overrideRoot { return overrideRoot }
         return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Jot", isDirectory: true)
+            .appendingPathComponent("org.ie9.app", isDirectory: true)
     }
 
     public static var recordingsRoot: URL {
@@ -52,6 +52,6 @@ public enum FileLayout {
               bytes > 4096 else { return nil }
         return Double(bytes) / 32_000
     }
-    public static func audioFLAC(in folder: URL) -> URL { folder.appendingPathComponent("audio.flac") }
+    public static func audioWAV(in folder: URL) -> URL { folder.appendingPathComponent("audio.wav") }
     public static func metaJSON(in folder: URL) -> URL { folder.appendingPathComponent("meta.json") }
 }

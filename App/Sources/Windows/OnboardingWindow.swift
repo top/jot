@@ -277,7 +277,7 @@ private struct WelcomeScreen: View {
     private static let cleanLine = "Let's meet at 2pm."
 
     var body: some View {
-        ScreenScaffold("Speak. It types.", "Hold a key, say the thing, and polished text lands wherever your cursor is.") {
+        ScreenScaffold("Speak. It types.", "Hold a key, say the thing, and text lands wherever your cursor is. Optional LLM cleanup can polish it.") {
             VStack(spacing: JotUI.Spacing.m) {
                 WaveformView(level: demoLevel, processing: false)
                     .frame(width: 200, height: 48)
@@ -350,152 +350,16 @@ private struct WelcomeScreen: View {
 
 private struct APIKeyScreen: View {
     let onNext: () -> Void
-    @State private var key = ""
-    @State private var validating = false
-    @State private var failed = false
-    @State private var saveFailed = false
-    /// The key authenticates but reaches no transcription model — say so here
-    /// rather than letting them discover it on their first dictation.
-    @State private var noModelAccess = false
-    /// Set when the server actively rejected the key, so we can say so instead of
-    /// the generic "didn't work".
-    @State private var rejection: String?
-    /// The check could not be performed. We let them past, but we say so.
-    @State private var unverified = false
-    /// Replacing a key that is already stored — bug report: a user who saved a
-    /// bad key had to UNINSTALL the app to get another chance at this screen.
-    @State private var replacing = false
-    @State private var storedKeyExists = KeychainStore.loadAPIKey() != nil
-    private var showingField: Bool { !storedKeyExists || replacing }
 
     var body: some View {
-        ScreenScaffold("Bring your own key.", "Jot uses your Gemini API key. It's stored in your Mac's Keychain and only ever sent to Google.") {
+        ScreenScaffold("Bring your own API.", "Connect an OpenAI-compatible service. Your key stays in your Mac's Keychain. LLM cleanup is optional.") {
             VStack(spacing: JotUI.Spacing.s) {
-                if !showingField {
-                    Label("Key already in your Keychain", systemImage: "checkmark.circle.fill")
-                        .font(JotUI.TypeScale.body())
-                        .foregroundStyle(JotUI.Colors.success)
-                    // Without this the only way out of a stored-but-wrong key was
-                    // to uninstall the app (dogfood).
-                    Button("Use a different key") {
-                        replacing = true
-                        key = ""
-                        rejection = nil
-                        unverified = false
-                        noModelAccess = false
-                    }
+                APIConfigurationEditor(onSaved: onNext)
+                Button("I'll add it later", action: onNext)
                     .buttonStyle(.plain)
                     .font(JotUI.TypeScale.labelSmall())
                     .foregroundStyle(JotUI.Colors.onSurfaceVariant)
-                } else {
-                    SecureField("Paste your key", text: $key)
-                        .textFieldStyle(.roundedBorder)
-                        .font(JotUI.TypeScale.code)
-                        .frame(width: 320)
-                    if failed {
-                        Text(rejection.map { "That key was rejected: \($0)" }
-                             ?? "That key didn't work — check it in AI Studio.")
-                            .font(JotUI.TypeScale.labelSmall())
-                            .foregroundStyle(JotUI.Colors.error)
-                            .multilineTextAlignment(.center)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: 320)
-                    }
-                    if unverified {
-                        Text("Couldn't reach Google to check this key — saved it anyway. Your first dictation will tell you for sure.")
-                            .font(JotUI.TypeScale.labelSmall())
-                            .foregroundStyle(JotUI.Colors.onSurfaceVariant)
-                            .multilineTextAlignment(.center)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: 320)
-                    }
-                    if saveFailed {
-                        Text("Couldn't save to your Mac's Keychain — try again.")
-                            .font(JotUI.TypeScale.labelSmall())
-                            .foregroundStyle(JotUI.Colors.error)
-                    }
-                    if noModelAccess {
-                        Text("That key works, but it can't reach Jot's transcription model yet. Setup continues — ask for access, then try a dictation.")
-                            .font(JotUI.TypeScale.labelSmall())
-                            .foregroundStyle(JotUI.Colors.error)
-                            .multilineTextAlignment(.center)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Link("Get a key in Google AI Studio", destination: URL(string: "https://aistudio.google.com/apikey")!)
-                        .font(JotUI.TypeScale.labelSmall())
-                }
-                if validating {
-                    ProgressView().controlSize(.small)
-                } else {
-                    PrimaryButton(title: showingField ? "Save & continue" : "Continue",
-                                  disabled: showingField && key.trimmingCharacters(in: .whitespaces).isEmpty) {
-                        showingField ? validate() : onNext()
-                    }
-                    if showingField {
-                        // Don't wall off mic/accessibility setup behind the key —
-                        // the menu bar nudges toward Settings → Advanced until one exists.
-                        Button("I'll add it later", action: onNext)
-                            .buttonStyle(.plain)
-                            .font(JotUI.TypeScale.labelSmall())
-                            .foregroundStyle(JotUI.Colors.onSurfaceVariant)
-                    }
-                }
             }
-        }
-    }
-
-    private func validate() {
-        // Guard the re-entry: `validating` swaps the button for a spinner, but a
-        // fast double-click can land two taps before SwiftUI redraws, and a user
-        // staring at a rejection WILL mash it.
-        guard !validating else { return }
-        let candidate = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        validating = true
-        failed = false
-        rejection = nil
-        unverified = false
-        Task {
-            let client = GeminiClient(apiKey: { candidate })
-            let check = await client.validateKey(endpoint: SettingsStore().geminiConfig.endpoint)
-
-            if case .rejected(let detail) = check {
-                // The server answered and said no. This is the case that used to
-                // slip through: validateKey returned a bare false, and a
-                // false-negative from a 1s reachability probe sent it down the
-                // "offline, save anyway" path — which then stored the bad key and
-                // advanced, with no way back to this screen.
-                rejection = detail
-                failed = true
-                validating = false
-                return
-            }
-
-            if check == .valid {
-                // "Your key works" must mean dictation works. Check the model
-                // Jot actually ships on — and only report, never substitute.
-                let config = SettingsStore().geminiConfig
-                noModelAccess = await client.resolveAvailableModel(
-                    from: [config.transcribeModel], endpoint: config.endpoint
-                ) == nil
-            }
-            unverified = (check == .unreachable)
-
-            guard KeychainStore.saveAPIKey(candidate) else {
-                saveFailed = true
-                validating = false
-                return
-            }
-            storedKeyExists = true
-            replacing = false
-            validating = false
-            // An unreachable check still advances — a captive portal must not
-            // wall someone out of setup — but the notice above says so plainly
-            // rather than implying the key was verified.
-            if unverified {
-                // Let them read it before the screen changes.
-                try? await Task.sleep(nanoseconds: 1_600_000_000)
-            }
-            onNext()
         }
     }
 }
@@ -855,7 +719,7 @@ private struct HowToScreen: View {
             VStack(spacing: JotUI.Spacing.m) {
                 VStack(alignment: .leading, spacing: JotUI.Spacing.s) {
                     gestureRow(keys: [keyName], title: "Hold and talk",
-                               detail: "Release, and polished text lands at your cursor.")
+                               detail: "Release, and your words land at your cursor.")
                     gestureRow(keys: [keyName, "space"], title: "Go hands-free",
                                detail: "Tap Space while holding — talk as long as you like, tap \(keyName) to finish.")
                     gestureRow(keys: ["esc"], title: "Changed your mind",
@@ -920,7 +784,7 @@ private struct TryItScreen: View {
     private static let script = "Let's schedule the meeting for 1pm — actually, no, make it 2pm."
 
     var body: some View {
-        ScreenScaffold("Try it.", "Click into the field, hold \(keyName), and change your mind mid-sentence:") {
+        ScreenScaffold("Try it.", "Click into the field, hold \(keyName), and say a sentence:") {
             VStack(spacing: JotUI.Spacing.s) {
                 if revealRaw == nil {
                     Text("“\(Self.script)”")
@@ -1080,7 +944,7 @@ private struct DoneScreen: View {
                 // page total (display + body), never three.
                 // "strips your ums" read as jargon to a first-time user (Kat,
                 // from the wild) — name the filler words plainly instead.
-                Text("It removes filler words like \"umm\" and \"uhh\", follows your change of mind, and takes \"new paragraph\" literally. Teach it your jargon in Settings → Dictionary.")
+                Text("Optional LLM cleanup removes filler words and applies self-corrections. Enable it in Settings → Dictation after configuring an LLM model. Teach it your jargon in Settings → Dictionary.")
                     .font(JotUI.TypeScale.body())
                     .foregroundStyle(JotUI.Colors.onSurfaceVariant)
                     .multilineTextAlignment(.center)

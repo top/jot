@@ -121,7 +121,4 @@ hdiutil convert "$RW_DMG" -format UDZO -imagekey zlib-level=9 -o "$OUT_DMG" >/de
 rm -f "$RW_DMG"
 rm -rf "$STAGING"
 
-# The container is signed by notarizing + stapling it in scripts/release.sh;
-# there is no local Developer ID key to codesign with (cloud-managed signing).
-
 echo "✓ $OUT_DMG ($(du -h "$OUT_DMG" | cut -f1))"

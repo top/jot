@@ -19,6 +19,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   core-tests:
     name: JotCore tests
@@ -38,7 +41,9 @@ jobs:
       - name: Generate project
         run: xcodegen generate
       - name: Build (unsigned)
+        shell: bash
         run: |
+          set -euo pipefail
           xcodebuild build \
             -project Jot.xcodeproj \
             -scheme Jot \

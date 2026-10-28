@@ -52,7 +52,7 @@ struct DictionaryView: View {
                 .textFieldStyle(.plain)
                 .font(JotUI.TypeScale.body(grad: grad))
                 .onSubmit(add)
-            TextField("Gemini hears it as… (optional)", text: $newMisspelling)
+            TextField("Recognized as… (optional)", text: $newMisspelling)
                 .textFieldStyle(.plain)
                 .font(JotUI.TypeScale.body(grad: grad))
                 .foregroundStyle(JotUI.Colors.onSurfaceVariant)

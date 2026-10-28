@@ -81,7 +81,7 @@ func render(scale: CGFloat) -> Data? {
 
     // The disclaimer belongs where every installer sees it.
     NSAttributedString(
-        string: "Open source (Apache 2.0) · Not an officially supported Google product · Brings your own Gemini API key",
+        string: "Open source (Apache 2.0) · OpenAI-compatible API · Not notarized by Apple",
         attributes: [
             .font: NSFont.systemFont(ofSize: 10.5, weight: .regular),
             .foregroundColor: NSColor(srgbRed: 0.52, green: 0.56, blue: 0.65, alpha: 1),

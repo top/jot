@@ -21,8 +21,8 @@ import Security
 /// lack it (errSecMissingEntitlement, -34018). Never UserDefaults/JSON
 /// (Superwhisper's documented failure).
 public enum KeychainStore {
-    private static let service = "com.ammaar.jot"
-    private static let account = "gemini-api-key"
+    private static let service = "org.ie9.app"
+    private static let account = "openai-api-key"
 
     private static func baseQuery(dataProtection: Bool) -> [String: Any] {
         var query: [String: Any] = [
@@ -55,7 +55,7 @@ public enum KeychainStore {
         deleteAPIKey()
         for dataProtection in [true, false] {
             var attributes = baseQuery(dataProtection: dataProtection)
-            attributes[kSecAttrLabel as String] = "Jot — Gemini API key"
+            attributes[kSecAttrLabel as String] = "Jot — API key"
             attributes[kSecValueData as String] = Data(key.utf8)
             if dataProtection {
                 attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
@@ -90,12 +90,12 @@ public enum KeychainStore {
         return deleted
     }
 
-    /// Dev bootstrap until onboarding (M7): if ~/.config/jot/apikey.dev
+    /// Dev bootstrap: if ~/.config/jot/openai-apikey.dev
     /// exists, migrate its contents into the Keychain and DELETE the file. Lets
     /// contributors seed a key without any UI, without leaving plaintext behind.
     public static func migrateDevKeyFileIfPresent() {
         let fileURL = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".config/jot/apikey.dev")
+            .appendingPathComponent(".config/jot/openai-apikey.dev")
         guard let raw = try? String(contentsOf: fileURL, encoding: .utf8) else { return }
         let key = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return }

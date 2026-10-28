@@ -37,13 +37,13 @@ This project follows
    this repository. Signing the CLA above affirms you have the right to contribute
    the code; this rule is the stricter provenance bar that goes with it.
 2. **No secrets, ever.** No API keys, tokens, or signing material in code, fixtures,
-   tests, or CI files. The app takes the user's own Gemini key at runtime and stores
+   tests, or CI files. The app takes the user's own API key at runtime and stores
    it in the Keychain.
 3. **Design tokens only.** UI changes must use `DesignTokens.swift` /
    `MotionTokens.swift`. If a value isn't in the tokens file, add it there first —
    no magic numbers in views. The full design contract is `docs/design/experience.md`.
 4. **Prompt changes need evidence in the PR.** `PromptV1.swift` steers the
-   optional flash-lite cleanup pass (Settings › Dictation → Tone). There is no
+   optional LLM cleanup pass (Settings › Dictation → Polish text). There is no
    automated eval set yet, so verification is by hand and the results belong in
    the PR description: dictate a self-correction, question-shaped speech ("what
    if we shipped it on Friday"), spoken punctuation, and an all-filler take —

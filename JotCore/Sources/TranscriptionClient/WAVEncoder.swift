@@ -15,9 +15,7 @@
 import AVFoundation
 import Foundation
 
-/// CAF → FLAC transcode at key-up. Measured: 5ms/14ms/231ms for 5s/30s/10min —
-/// invisible inside the latency budget.
-public enum FLACEncoder {
+public enum WAVEncoder {
     public struct Output: Sendable {
         public let url: URL
         public let byteCount: Int
@@ -29,9 +27,9 @@ public enum FLACEncoder {
         case writeFailed(String)
     }
 
-    public static func encode(cafURL: URL, flacURL: URL) throws -> Output {
+    public static func encode(cafURL: URL, wavURL: URL) throws -> Output {
         let started = Date()
-        try? FileManager.default.removeItem(at: flacURL)
+        try? FileManager.default.removeItem(at: wavURL)
 
         let reader: AVAudioFile
         do {
@@ -41,13 +39,16 @@ public enum FLACEncoder {
         }
 
         let settings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatFLAC,
+            AVFormatIDKey: kAudioFormatLinearPCM,
             AVSampleRateKey: reader.processingFormat.sampleRate,
             AVNumberOfChannelsKey: reader.processingFormat.channelCount,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsBigEndianKey: false,
         ]
         do {
             let writer = try AVAudioFile(
-                forWriting: flacURL, settings: settings,
+                forWriting: wavURL, settings: settings,
                 commonFormat: .pcmFormatInt16, interleaved: true
             )
             let chunk = AVAudioPCMBuffer(pcmFormat: reader.processingFormat, frameCapacity: 65_536)!
@@ -62,7 +63,7 @@ public enum FLACEncoder {
             throw EncodeError.writeFailed(String(describing: error))
         }
 
-        let bytes = ((try? FileManager.default.attributesOfItem(atPath: flacURL.path))?[.size] as? Int) ?? 0
-        return Output(url: flacURL, byteCount: bytes, encodeSeconds: Date().timeIntervalSince(started))
+        let bytes = ((try? FileManager.default.attributesOfItem(atPath: wavURL.path))?[.size] as? Int) ?? 0
+        return Output(url: wavURL, byteCount: bytes, encodeSeconds: Date().timeIntervalSince(started))
     }
 }

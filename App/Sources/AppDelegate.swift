@@ -22,7 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
         // Single instance, always: two copies means two event taps, two pills,
         // and a race over the History DB. The newer instance defers.
-        let bundleID = Bundle.main.bundleIdentifier ?? "com.ammaar.jot"
+        let bundleID = Bundle.main.bundleIdentifier ?? "org.ie9.app"
         let others = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
             .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
         if !others.isEmpty {
@@ -34,12 +34,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // didFinishLaunching — registering in did- silently dropped any
         // jot:// URL that cold-launched the app (production pass 2).
         registerURLHandler()
-        // Before ANYTHING reads the Keychain, defaults, or History: carry over
-        // everything from the app's pre-rename identity.
-        LegacyMigration.runIfNeeded()
-        // AFTER LegacyMigration: smartFormatting is in its key list and has to be
-        // pulled out of the old defaults domain before this reads it.
-        FormattingSettingsMigration.runIfNeeded()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -161,9 +155,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "soundsEnabled": settings.setSoundsEnabled(value)
         case "doubleTapLock": settings.setDoubleTapLock(value)
         case "experimentalNoiseHandling": settings.setExperimentalNoiseHandling(value)
-        case "smartTranscription": settings.setSmartTranscription(value)
         case "smartCleanupPass": settings.setSmartCleanupPass(value)
-        case "legacyTranscribeEndpoint": settings.setLegacyTranscribeEndpoint(value)
         default: Log.session.warning("debug set: unknown key \(key, privacy: .public)")
         }
     }

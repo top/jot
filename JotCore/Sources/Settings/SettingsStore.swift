@@ -45,12 +45,7 @@ public struct SettingsStore: Sendable {
     /// warning and the effective config MUST use the same predicate, or one of
     /// them lies about which endpoint is in use.
     public static func usableEndpointURL(_ raw: String?) -> URL? {
-        guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty,
-              let url = URL(string: raw),
-              let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme) else {
-            return nil
-        }
-        return url
+        OpenAIConfig(baseURL: raw ?? "").endpoint
     }
 
     /// True once the user finished onboarding — a deliberate "I'll add it later"
@@ -63,18 +58,19 @@ public struct SettingsStore: Sendable {
         Self.set(done, forKey: "hasCompletedOnboarding")
     }
 
-    public var geminiConfig: GeminiConfig {
-        var config = GeminiConfig()
-        if let url = Self.usableEndpointURL(Self.defaults.string(forKey: "endpointOverride")) {
-            config.endpoint = url
+    public var apiConfig: OpenAIConfig {
+        guard let data = Self.defaults.dictionary(forKey: "openAIConfig") as? [String: String] else {
+            return OpenAIConfig()
         }
-        if let model = Self.defaults.string(forKey: "transcribeModelOverride"), !model.isEmpty {
-            config.transcribeModel = model
-        }
-        if let model = Self.defaults.string(forKey: "cleanupModelOverride"), !model.isEmpty {
-            config.cleanupModel = model
-        }
-        return config
+        return OpenAIConfig(baseURL: data["baseURL"] ?? "", asrModel: data["asrModel"] ?? "", llmModel: data["llmModel"] ?? "")
+    }
+
+    public var apiConfigured: Bool {
+        apiConfig.isConfigured && !(KeychainStore.loadAPIKey() ?? "").isEmpty
+    }
+
+    public func setAPIConfig(_ config: OpenAIConfig) {
+        Self.set(["baseURL": config.baseURL, "asrModel": config.asrModel, "llmModel": config.llmModel], forKey: "openAIConfig")
     }
 
     /// Double-tap the dictation key to lock hands-free. OFF by default: firm taps
@@ -112,42 +108,6 @@ public struct SettingsStore: Sendable {
 
     // MARK: - Formatting policy
 
-    /// How a dictation gets formatted. Two independent flags rather than a
-    /// three-valued enum, because all four combinations are meaningful — in
-    /// particular (nativeSmart: false, cleanupPass: true) is the exact pipeline
-    /// Jot shipped before native smart existed, and that is the configuration you
-    /// want reachable if smart mode ever regresses server-side.
-    public struct FormattingPolicy: Equatable, Sendable {
-        public var nativeSmart: Bool
-        public var cleanupPass: Bool
-
-        public init(nativeSmart: Bool, cleanupPass: Bool) {
-            self.nativeSmart = nativeSmart
-            self.cleanupPass = cleanupPass
-        }
-
-        public var mode: GeminiClient.TranscriptionMode { nativeSmart ? .smart : .verbatim }
-        /// The gate only has a real reference to compare against when a second
-        /// model actually rewrote the text.
-        public var runsValidationGate: Bool { cleanupPass }
-    }
-
-    public var formattingPolicy: FormattingPolicy {
-        FormattingPolicy(
-            nativeSmart: Self.defaults.object(forKey: "smartTranscription") as? Bool ?? true,
-            cleanupPass: Self.defaults.object(forKey: "smartCleanupPass") as? Bool ?? false
-        )
-    }
-
-    /// Native `mode: "smart"` — the default transcription path.
-    public var smartTranscriptionEnabled: Bool {
-        Self.defaults.object(forKey: "smartTranscription") as? Bool ?? true
-    }
-
-    public func setSmartTranscription(_ enabled: Bool) {
-        Self.set(enabled, forKey: "smartTranscription")
-    }
-
     /// The opt-in second pass through the cleanup model — this is what carries
     /// per-app tone. Off by default: it costs a round trip and sends the
     /// transcript text a second time.
@@ -164,22 +124,6 @@ public struct SettingsStore: Sendable {
             Self.defaults.removeObject(forKey: "gateTrips")
         }
         Self.set(enabled, forKey: "smartCleanupPass")
-    }
-
-    /// Escape hatch back to the pre-native-smart transport.
-    ///
-    /// `/v1beta/interactions` is days old. For the cost of one settings row, a
-    /// server-side regression in smart mode becomes something a user can switch
-    /// off rather than something that needs a hotfix release. Smart formatting is
-    /// unavailable on the legacy endpoint (`mode` returns an empty transcript
-    /// there), so this necessarily means verbatim + the optional tone pass.
-    /// Remove once native smart has a clean dogfood run.
-    public var usesLegacyTranscribeEndpoint: Bool {
-        Self.defaults.bool(forKey: "legacyTranscribeEndpoint")
-    }
-
-    public func setLegacyTranscribeEndpoint(_ enabled: Bool) {
-        Self.set(enabled, forKey: "legacyTranscribeEndpoint")
     }
 
     public func setHotkeyKey(_ key: HotkeyKey) {
@@ -200,50 +144,6 @@ public struct SettingsStore: Sendable {
 
     public func setExperimentalNoiseHandling(_ enabled: Bool) {
         Self.set(enabled, forKey: "experimentalNoiseHandling")
-    }
-
-    /// Stream audio to the Live API over a WebSocket and show words as they are
-    /// spoken, instead of uploading the clip at key-up.
-    ///
-    /// Experimental and off by default. It is a genuinely different transport
-    /// with a genuinely different failure surface — a socket can die mid-sentence
-    /// where an upload either succeeds or does not — so it earns its way on by
-    /// dogfooding, not by being the new default.
-    ///
-    /// Turning this on never risks words. The CAF is written exactly as before,
-    /// and a live stream that ends any way other than cleanly is discarded in
-    /// favour of the batch upload over that file.
-    public var liveTranscription: Bool {
-        Self.defaults.bool(forKey: "liveTranscription")
-    }
-
-    public func setLiveTranscription(_ enabled: Bool) {
-        Self.set(enabled, forKey: "liveTranscription")
-    }
-
-    /// Live needs the interactions-era transport; the legacy escape hatch is a
-    /// different endpoint entirely. Rather than let the two contradict each other
-    /// silently, the hatch wins and live stands down.
-    public var liveTranscriptionActive: Bool {
-        liveTranscription && !usesLegacyTranscribeEndpoint
-    }
-
-    // Raw override values for the Settings UI — panes must not duplicate the
-    // defaults keys (a rename would silently desync display from effect).
-    public var endpointOverride: String? { Self.defaults.string(forKey: "endpointOverride") }
-    public var transcribeModelOverride: String? { Self.defaults.string(forKey: "transcribeModelOverride") }
-    public var cleanupModelOverride: String? { Self.defaults.string(forKey: "cleanupModelOverride") }
-
-    public func setEndpointOverride(_ raw: String?) {
-        Self.set(raw, forKey: "endpointOverride")
-    }
-
-    public func setTranscribeModelOverride(_ raw: String?) {
-        Self.set(raw, forKey: "transcribeModelOverride")
-    }
-
-    public func setCleanupModelOverride(_ raw: String?) {
-        Self.set(raw, forKey: "cleanupModelOverride")
     }
 
     /// Days to keep audio files (transcripts are kept until deleted). 0 = forever.

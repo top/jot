@@ -14,68 +14,48 @@
 
 name: Release
 
-# UNPROVEN — this workflow has never produced a release, and it is
-# workflow_dispatch only so that tagging does not fire a job that is guaranteed
-# to fail (a permanently red workflow reads as an unmaintained project).
-#
-# It cannot run until a Developer ID certificate exists with a LOCAL private key.
-# The one in use is cloud-managed — the key lives with Apple — so there is no
-# .p12 to put in SIGNING_CERT_P12, and without a certificate the job dies at
-# `xcodebuild archive` with "No Accounts", well before signing.
-#
-# Until then, releases are cut by hand: ./scripts/release.sh (see docs/RELEASING.md).
-# Re-enable the tag trigger only after this has produced a real release once.
 on:
+  push:
+    tags: ['v*']
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   release:
-    name: Build, notarize, publish DMG
+    name: Build and publish unnotarized DMG
     runs-on: macos-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+
+      - name: Check tag matches MARKETING_VERSION
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          VERSION=$(grep -m1 'MARKETING_VERSION' project.yml | awk '{print $2}' | tr -d '"')
+          [ "$GITHUB_REF_NAME" = "v$VERSION" ] || { echo "::error::tag $GITHUB_REF_NAME != v$VERSION in project.yml"; exit 1; }
 
       - name: Install xcodegen
         run: brew install xcodegen
 
-      - name: Import signing certificate
-        env:
-          # Developer ID Application cert, base64-encoded .p12 + its password.
-          SIGNING_CERT_P12: ${{ secrets.SIGNING_CERT_P12 }}
-          SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
-        run: |
-          if [ -z "$SIGNING_CERT_P12" ]; then
-            echo "No signing cert secret. NOTE: release.sh refuses to emit an"
-            echo "unsigned artifact, so the build will fail at the archive step."
-            exit 0
-          fi
-          KEYCHAIN=build.keychain
-          security create-keychain -p ci "$KEYCHAIN"
-          security default-keychain -s "$KEYCHAIN"
-          security unlock-keychain -p ci "$KEYCHAIN"
-          echo "$SIGNING_CERT_P12" | base64 --decode > cert.p12
-          security import cert.p12 -k "$KEYCHAIN" -P "$SIGNING_CERT_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple: -s -k ci "$KEYCHAIN"
-
-      - name: Store notarization credentials
-        env:
-          NOTARY_KEY: ${{ secrets.NOTARY_API_KEY }}
-          NOTARY_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
-          NOTARY_ISSUER: ${{ secrets.NOTARY_API_ISSUER }}
-        run: |
-          if [ -z "$NOTARY_KEY" ]; then
-            echo "No notarization secrets — DMG will be unnotarized."
-            exit 0
-          fi
-          echo "$NOTARY_KEY" > notary.p8
-          xcrun notarytool store-credentials jot-notary \
-            --key notary.p8 --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER"
-
-      - name: Build release DMG
+      - name: Build and package unnotarized DMG
         run: ./scripts/release.sh
 
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Jot-DMG
+          path: build/release/*.dmg
+          if-no-files-found: error
+
       - name: Upload to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: build/release/*.dmg
+          fail_on_unmatched_files: true
           generate_release_notes: true
+          body: |
+            This build is ad-hoc signed, not Developer ID-signed or notarized by Apple.
+            macOS Gatekeeper may block it on first launch.

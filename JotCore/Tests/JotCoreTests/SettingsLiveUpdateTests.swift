@@ -23,8 +23,7 @@ final class SettingsLiveUpdateTests: XCTestCase {
 
     override func tearDown() {
         for key in ["showIdleIndicator", "soundsEnabled", "doubleTapLock", "gateTrips",
-                    "experimentalNoiseHandling", "smartTranscription", "smartCleanupPass",
-                    "legacyTranscribeEndpoint"] {
+                    "experimentalNoiseHandling", "smartCleanupPass", "openAIConfig"] {
             UserDefaults.standard.removeObject(forKey: key)
         }
     }
@@ -46,9 +45,10 @@ final class SettingsLiveUpdateTests: XCTestCase {
     func testEverySetterPostsItsKey() {
         expectChange(forKey: "showIdleIndicator") { settings.setShowIdleIndicator(false) }
         expectChange(forKey: "soundsEnabled") { settings.setSoundsEnabled(false) }
-        expectChange(forKey: "smartTranscription") { settings.setSmartTranscription(false) }
         expectChange(forKey: "smartCleanupPass") { settings.setSmartCleanupPass(false) }
-        expectChange(forKey: "legacyTranscribeEndpoint") { settings.setLegacyTranscribeEndpoint(true) }
+        expectChange(forKey: "openAIConfig") {
+            settings.setAPIConfig(OpenAIConfig(baseURL: "http://localhost:8000/v1", asrModel: "custom-asr"))
+        }
         expectChange(forKey: "doubleTapLock") { settings.setDoubleTapLock(true) }
         expectChange(forKey: "hotkeyKey") { settings.setHotkeyKey(.fn) }
         expectChange(forKey: "audioRetentionDays") { settings.setAudioRetentionDays(7) }
@@ -67,6 +67,21 @@ final class SettingsLiveUpdateTests: XCTestCase {
         // the old key while the real behaviour silently regressed.)
         settings.setSmartCleanupPass(true)
         XCTAssertEqual(settings.recordGateTrip(), 1)
+    }
+
+    func testAPIConfigPersistsWithoutReusingLegacyOverrides() {
+        let defaults = UserDefaults.standard
+        let legacyKeys = ["endpointOverride", "transcribeModelOverride", "cleanupModelOverride"]
+        let original = legacyKeys.map { defaults.object(forKey: $0) }
+        defer {
+            for (key, value) in zip(legacyKeys, original) { defaults.set(value, forKey: key) }
+        }
+        for key in legacyKeys { defaults.set("legacy-value", forKey: key) }
+        defaults.removeObject(forKey: "openAIConfig")
+        XCTAssertFalse(settings.apiConfig.isConfigured)
+        let config = OpenAIConfig(baseURL: "http://localhost:8000/v1", asrModel: "Qwen/Qwen3-ASR-1.7B", llmModel: "custom-llm")
+        settings.setAPIConfig(config)
+        XCTAssertEqual(SettingsStore().apiConfig, config)
     }
 }
 

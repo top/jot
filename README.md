@@ -4,9 +4,9 @@
 
 # Jot
 
-**[Gemini 3.5 Transcribe](https://ai.google.dev/gemini-api/docs/models/gemini-3.5-transcribe) Demo. Hold a key. Speak. It types.**
+**OpenAI-compatible dictation. Hold a key. Speak. It types.**
 
-Smart dictation for macOS that puts polished text wherever your cursor is.
+Dictation for macOS with your own ASR and optional text-cleanup model.
 
 <sub>Created by [Ammaar Reshi](https://x.com/ammaar) · Apache 2.0 licensed</sub>
 
@@ -19,7 +19,7 @@ This is not an officially supported Google product.
 ## What it is
 
 Hold `fn`, say the thing, let go. A moment later your words are in the app you
-were already using — punctuated, filler words removed, cleaned up. No window to switch
+were already using. Enable optional LLM cleanup for filler removal and formatting. No window to switch
 to, no transcript to copy, no account to make.
 
 <img width="640" height="294" alt="Jot preview" src="https://github.com/user-attachments/assets/669efea9-dbfe-4174-a8fe-748aab818f14" />
@@ -40,9 +40,9 @@ The key is rebindable in Settings → General if `fn` is spoken for.
 
 ## What makes it different
 
-**It follows a change of mind.** Say *"let's meet at 1pm — actually, no, make it
-2pm"* and Jot writes **"Let's meet at 2pm."** That is the whole pitch, and
-onboarding makes you do it once so you believe it.
+**Optional text cleanup.** A configured LLM can remove filler words, apply
+self-corrections and match app tone. Enable it in Settings → Dictation.
+If cleanup fails or changes too much, Jot keeps the original transcript.
 
 **It never loses your words.** Audio goes to disk from the first millisecond, so
 a crash, a `kill -9`, or a flat battery costs you nothing — the recording is
@@ -51,18 +51,17 @@ Every failure is retryable from History. Release the key mid-word and it keeps
 listening until you actually stop.
 
 **It is private by architecture.** Your voice goes from your Mac straight to the
-Gemini API with *your* key. No middleman server, no account, no analytics, no
+OpenAI-compatible service with *your* key. No Jot server, no account, no analytics, no
 screenshots, no keystroke logging — one network host, and you can read every
 line of the code that talks to it. See [PRIVACY.md](docs/PRIVACY.md).
 
 **Your jargon, spelled right.** Names and product terms go in the Dictionary and
-ride along with the audio, so the model hears "Kubernetes" instead of guessing
-"cooper netties" — corrected at the source, not patched afterwards. Tone matching for
-email vs. chat vs. code is available too, in Settings → Dictation.
+ride along with the audio as recognition hints. Their effect depends on the
+ASR service; explicit misspelling replacements are always applied locally.
 
 ## Install
 
-1. Download the latest `Jot-x.y.z.dmg` from [Releases](../../releases/latest).
+1. Download the latest `Jot-x.y.z-UNNOTARIZED.dmg` from [Releases](../../releases/latest).
 2. Drag Jot into **Applications** and launch it from there — apps run from a
    mounted disk image are sandboxed by macOS and the permissions you grant will
    not stick.
@@ -73,27 +72,32 @@ email vs. chat vs. code is available too, in Settings → Dictation.
 
 Setup takes about two minutes and the app walks you through it:
 
-1. **Paste a Gemini API key** — get one at
-   [Google AI Studio](https://aistudio.google.com/apikey). It is stored in your
-   macOS Keychain and only ever sent to Google.
+1. **Configure Base URL, API Key and ASR Model.** The URL includes the API
+  prefix, for example `http://localhost:8000/v1`. The key stays in Keychain.
+  LLM Model is optional. You can skip configuration and add it later in
+  Settings → Advanced.
 2. **Allow the microphone** — say hello and it advances by itself.
 3. **Allow Accessibility** — macOS requires this for any app that types into
    another app.
 4. **Hold `fn` and talk.**
 
-**Cost:** you pay Google for what you dictate at
-[Gemini API pricing](https://ai.google.dev/pricing); a free tier exists and a
-typical dictation is a few seconds of audio. Jot itself is free and has no
-account.
+ASR uses `POST /audio/transcriptions`; optional cleanup uses
+`POST /chat/completions`. Both share the configured Base URL and key. Model IDs
+are entered manually, with no built-in provider or model fallback. A Qwen3-ASR
+service must expose the transcription endpoint; Chat-only APIs need a different
+adapter and are not supported. For an unauthenticated local server, use a
+placeholder key such as `EMPTY` if the server accepts it.
 
-**Model:** Jot runs on Gemini's specialist transcription model,
-`gemini-3.5-transcribe`. Your key needs access to it; setup tells you up front if
-it does not, instead of failing on your first dictation.
+Connection checking uses `/models` and does not prove that either model works.
+Unsupported or unreachable checks allow saving an unverified configuration.
+Service costs and data handling depend on your provider. Recordings retain the
+existing 10-minute limit. See [release instructions](docs/RELEASING.md) for
+opening an unnotarized build.
 
 ## How it works
 
 ```
-fn down ─▶ capture (CAF on disk from t=0) ─▶ fn up ─▶ FLAC ─▶ Gemini transcribe
+fn down ─▶ capture (CAF on disk from t=0) ─▶ fn up ─▶ WAV ─▶ ASR API
                                                                     │
    cursor ◀─ insert (AX → paste → clipboard) ◀─ [validate ◀─ tone pass] ─┘
                                               (optional, off by default)
@@ -134,17 +138,15 @@ brew install xcodegen
 open Jot.xcodeproj          # or work in Xcode
 ```
 
-Debug builds sign ad-hoc, so a clean clone needs no Apple account, certificate,
-or team membership — `./scripts/build.sh` works as-is. To build under your own
-team instead: `./scripts/build.sh DEVELOPMENT_TEAM=XXXXXXXXXX`. Only release
-builds (`scripts/release.sh`) need a real Developer ID.
+Builds sign ad-hoc, so a clean clone needs no Apple account, certificate,
+or team membership. The fork uses bundle ID `org.ie9.app`.
 
 ```
 App/            menu bar item, HUD pill, windows, design tokens, icon + sounds
 JotCore/        all engine logic, headless and testable
   HotkeyEngine/     CGEventTap + the pure hold/lock/cancel grammar
   AudioEngine/      crash-safe CAF capture, device changes, prewarming
-  TranscriptionClient/  Gemini calls, timeouts, retries, FLAC
+  TranscriptionClient/  OpenAI-compatible calls, timeouts, retries, WAV
   FormattingPipeline/   cleanup prompt, validation gate, dictionary rules
   InsertionEngine/      the AX → paste → clipboard ladder
   HistoryStore/         GRDB index, recovery, retry queue, retention
@@ -167,9 +169,11 @@ Transcript text is logged as `private` and never appears in those logs.
 
 ### Releasing
 
-`./scripts/release.sh` archives, signs with Developer ID, notarizes, staples,
-and builds the installer DMG. It refuses to produce a shareable DMG that is not
-notarized. See [docs/RELEASING.md](docs/RELEASING.md) for the certificate setup.
+Push a `v*` tag to build and publish an unnotarized universal DMG through GitHub
+Actions, or run the Release workflow manually to download a test artifact.
+No Apple Developer account or signing secrets are needed. Gatekeeper may block
+the first launch. See [docs/RELEASING.md](docs/RELEASING.md) for installation
+and release instructions.
 
 ## License
 

@@ -28,7 +28,7 @@ final class DictationController {
     private let engine = EventTapEngine(key: .fn)
     private let hud = PillHUDController()
     private let earcons = EarconPlayer()
-    private let transcriptionService: GeminiTranscriptionService
+    private let transcriptionService: OpenAITranscriptionService
     private let historyStore: HistoryStore?
     private var recoveryScanner: RecoveryScanner?
     private var retryQueue: RetryQueue?
@@ -45,50 +45,9 @@ final class DictationController {
     var onStatusChange: ((String) -> Void)?
     var onStatusItemState: ((StatusItemController.VisualState) -> Void)?
 
-    /// Builds a live session, or nil — which is the normal answer, since live is
-    /// experimental and off by default.
-    ///
-    /// It lives here rather than in JotCore because it is the one place that
-    /// needs both the Keychain and the Dictionary, and the coordinator should
-    /// know about neither.
-    @MainActor
-    private static func makeLiveSession() -> LiveTranscribing? {
-        let settings = SettingsStore()
-        guard settings.liveTranscriptionActive else { return nil }
-        // A live path that is reliably broken is worse than one that is off: every
-        // attempt costs a handshake and then the full upload anyway, so the user
-        // pays latency on every dictation for a feature that never delivers. Stop
-        // trying after a run of failures; a single success clears the streak, so a
-        // bad hotel wifi heals itself without anyone touching a setting.
-        let stats = LiveStats()
-        if stats.shouldStopTrying {
-            Log.transcription.info(
-                "live disabled for now after \(stats.consecutiveFailures) consecutive failures — uploading instead"
-            )
-            return nil
-        }
-        guard let key = KeychainStore.loadAPIKey(), !key.isEmpty else { return nil }
-        let dictionary = DictionaryStore()
-        let session = LiveTranscriptionSession(
-            transport: WebSocketTransport(apiKey: { key }),
-            setup: LiveSetup(
-                smart: settings.smartTranscriptionEnabled,
-                // The same terms the batch path biases with, so switching modes
-                // does not quietly change how someone's name gets spelled.
-                customVocabulary: dictionary.vocabulary()
-            )
-        )
-        return LiveTranscriber(
-            session: session,
-            modelID: "gemini-3.5-transcribe-live",
-            replacementRules: { DictionaryStore().replacementRules() }
-        )
-    }
-
     init() {
         KeychainStore.migrateDevKeyFileIfPresent()
-        let client = GeminiClient(apiKey: { KeychainStore.loadAPIKey() })
-        let service = GeminiTranscriptionService(client: client)
+        let service = OpenAITranscriptionService()
         transcriptionService = service
         historyStore = try? HistoryStore.standard()
         coordinator = DictationCoordinator(
@@ -108,15 +67,14 @@ final class DictationController {
                     targetAppName: app?.localizedName,
                     targetPID: app?.processIdentifier
                 )
-            },
-            makeLiveSession: Self.makeLiveSession
+            }
         )
     }
 
     private var needsOnboarding: Bool {
         // A deliberate "I'll add it later" is remembered — the wizard must not
         // re-trap that user every launch; the menu bar carries the key nudge.
-        (KeychainStore.loadAPIKey() == nil && !SettingsStore().hasCompletedOnboarding)
+        (!SettingsStore().apiConfigured && !SettingsStore().hasCompletedOnboarding)
             || !AXIsProcessTrusted()
             || AVCaptureDevice.authorizationStatus(for: .audio) != .authorized
     }
@@ -167,12 +125,7 @@ final class DictationController {
                 // direct notice would be stomped by the session's own transitions.
                 // Don't assert what we haven't read: with Smart transcription off,
                 // or on the legacy endpoint, "still on" would be a lie.
-                let settings = SettingsStore()
-                let stillSmart = settings.smartTranscriptionEnabled && !settings.usesLegacyTranscribeEndpoint
-                let tail = stillSmart
-                    ? "Smart transcription is still on."
-                    : "Re-enable it in Settings → Dictation."
-                self?.showBackgroundNotice("Turned off tone matching — the second model kept misfiring. \(tail)", for: 5.0, sound: nil)
+                self?.showBackgroundNotice("Text cleanup was turned off after repeated invalid results. Re-enable it in Settings → Dictation.", for: 5.0, sound: nil)
             }
         }
 
@@ -229,9 +182,9 @@ final class DictationController {
     private func activateEngine() {
         if engine.start() {
             engineActive = true
-            if KeychainStore.loadAPIKey() == nil {
+            if !SettingsStore().apiConfigured {
                 // New-user path: dictation can't work yet — say exactly where to go.
-                onStatusChange?("Add your Gemini API key in Settings → Advanced")
+                onStatusChange?("Configure your API in Settings → Advanced")
                 onStatusItemState?(.attention)
             } else {
                 onStatusChange?("Ready — hold \(SettingsStore().hotkeyKey.displayName) to dictate")
@@ -244,7 +197,6 @@ final class DictationController {
             // start() because the onboarding path never reaches activateEngine()
             // until permissions are granted — and the migrating cohort is exactly
             // the cohort that gets re-prompted.
-            announceSmartRestoredIfNeeded()
             // Idle time, not insert time: Sauce's one-time keyboard-layout
             // lookup otherwise lands between transcript-ready and ⌘V.
             Task { @MainActor in PasteInserter.warmKeyboardLayout() }
@@ -295,7 +247,7 @@ final class DictationController {
         } else if AVCaptureDevice.authorizationStatus(for: .audio) != .authorized {
             onStatusChange?("Allow microphone access in System Settings to dictate")
         } else {
-            onStatusChange?("Add your Gemini API key in Settings → Advanced")
+            onStatusChange?("Configure your API in Settings → Advanced")
         }
         onStatusItemState?(.attention)
     }
@@ -318,7 +270,7 @@ final class DictationController {
             applyHotkeySettings()
             // The menu-bar status line names the key — keep it truthful, but
             // never overwrite an attention message ("Grant Accessibility…").
-            if engineActive, KeychainStore.loadAPIKey() != nil {
+            if engineActive, SettingsStore().apiConfigured {
                 onStatusChange?("Ready — hold \(SettingsStore().hotkeyKey.displayName) to dictate")
             }
         case "accessibility":
@@ -326,15 +278,16 @@ final class DictationController {
             if !engineActive {
                 activateEngine()
             }
-        case "apiKey":
-            if KeychainStore.loadAPIKey() != nil {
+        case "apiKey", "openAIConfig":
+            if SettingsStore().apiConfigured {
                 // Covers the "I'll add it later" onboarding path, where the
                 // engine was never started: a key arriving in Settings must
                 // bring the whole app to life, not just flip a badge.
                 // engine.start() is reentrant; hud.show() is idempotent.
                 activateEngine()
+                Task { [weak self] in await self?.retryQueue?.drain() }
             } else {
-                onStatusChange?("Add your Gemini API key in Settings → Advanced")
+                onStatusChange?("Configure your API in Settings → Advanced")
                 onStatusItemState?(.attention)
             }
         default:
@@ -356,7 +309,7 @@ final class DictationController {
             historyStore.upsert(meta: meta, folder: folder)
             // "Never keep audio": purge the moment a transcript exists (audit #2).
             if SettingsStore().audioRetentionDays < 0, meta.rawTranscript != nil || meta.status == .silent {
-                for audio in [FileLayout.audioCAF(in: folder), FileLayout.audioFLAC(in: folder)] {
+                for audio in [FileLayout.audioCAF(in: folder), FileLayout.audioWAV(in: folder)] {
                     try? FileManager.default.removeItem(at: audio)
                 }
             }
@@ -378,7 +331,7 @@ final class DictationController {
         queue.onDrainBlocked = { [weak self] error in
             let message: String
             if case .auth = error {
-                message = "Queued dictations are waiting — fix your API key in Settings → Advanced"
+                message = "Queued dictations are waiting — check your API configuration in Settings → Advanced"
             } else {
                 message = "Daily quota reached — queued dictations will retry later"
             }
@@ -740,25 +693,6 @@ final class DictationController {
     /// Session-critical notices (cap warning, device change) still interrupt.
     private var pendingNotice: (message: String, seconds: TimeInterval, sound: EarconPlayer.Earcon?)?
 
-    /// The migration flips formatting back on for users the OLD auto-degrade had
-    /// switched off — they were degraded because the cleanup model was unreliable,
-    /// and native smart transcription is a different mechanism entirely. Telling
-    /// them is not optional: this codebase's rule is that auto-degrade must never
-    /// be silent, and silently UN-degrading is the same rule broken in the other
-    /// direction. Deferred, because it fires during launch.
-    private func announceSmartRestoredIfNeeded() {
-        let key = "shouldAnnounceSmartRestored"
-        guard UserDefaults.standard.bool(forKey: key) else { return }
-        UserDefaults.standard.removeObject(forKey: key)
-        // showBackgroundNotice, not showNotice: bind() replays the coordinator's
-        // current .idle state a moment after launch, which repaints the pill and
-        // would stomp a directly-shown notice.
-        showBackgroundNotice(
-            "Smart transcription is back on — the model does the formatting itself now.",
-            for: 5.0, sound: nil
-        )
-    }
-
     private func showBackgroundNotice(_ message: String, for seconds: TimeInterval, sound: EarconPlayer.Earcon?) {
         switch coordinator.state {
         case .idle, .done, .cancelled, .failed:
@@ -856,19 +790,17 @@ final class DictationController {
 
     private static func copy(for failure: DictationFailure) -> String {
         switch failure {
-        case .network: return "Couldn't reach Gemini — saved to History"
+        case .network: return "Couldn't reach your API — saved to History"
         case .auth:
-            return KeychainStore.loadAPIKey() == nil
-                ? "Add your Gemini API key in Settings — recording saved to History"
+            return !SettingsStore().apiConfigured
+                ? "Configure your API in Settings — recording saved to History"
                 : "API key isn't working — saved to History"
         case .modelAccess:
-            return SettingsStore().transcribeModelOverride != nil
-                ? "That model isn't available to your key — check Settings → Advanced. Saved to History"
-                : "Your key can't use the transcription model yet — recording saved to History"
-        case .badRequest: return "Gemini rejected the request — saved to History"
+            return "Check the Base URL, model and permissions in Settings → Advanced. Saved to History"
+        case .badRequest: return "API rejected the request — saved to History"
         case .rateLimited: return "Rate limited — History will retry it shortly"
         case .noMicrophone: return "No microphone found — connect one to dictate"
-        case .quotaExhausted: return "Daily quota reached for your key — check Google AI Studio. Saved to History"
+        case .quotaExhausted: return "API quota exhausted — check your provider. Saved to History"
         case .timeout: return "Timed out — saved to History"
         case .validation: return "Couldn't transcribe — saved to History"
         case .safetyBlocked: return "The API declined this one — saved to History"

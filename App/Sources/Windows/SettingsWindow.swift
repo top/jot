@@ -300,11 +300,10 @@ struct GeneralPane: View {
 struct DictationPane: View {
     private let settings = SettingsStore()
     @State private var sounds = SettingsStore().soundsEnabled
-    @State private var smartTranscription = SettingsStore().smartTranscriptionEnabled
     @State private var cleanupPass = SettingsStore().smartCleanupPassEnabled
+    @State private var llmConfigured = !SettingsStore().apiConfig.llmModel.isEmpty
     @State private var showIdleDot = SettingsStore().showIdleIndicator
     @State private var noiseHandling = SettingsStore().experimentalNoiseHandling
-    @State private var liveTranscription = SettingsStore().liveTranscription
 
     var body: some View {
         Form {
@@ -318,61 +317,30 @@ struct DictationPane: View {
             }
 
             Section {
-                Toggle("Smart transcription", isOn: $smartTranscription)
-                    .onChange(of: smartTranscription) { _, enabled in
-                        settings.setSmartTranscription(enabled)
-                    }
-            } footer: {
-                Text("Removes filler words and applies self-corrections (\"at 2 — actually 3\") as it transcribes. Off = word for word — unless tone matching below is on, which rewrites either way.")
-            }
-
-            Section {
-                Toggle("Match tone to the app you're in", isOn: $cleanupPass)
+                Toggle("Polish text and match app tone", isOn: $cleanupPass)
                     .onChange(of: cleanupPass) { _, enabled in
                         guard enabled != settings.smartCleanupPassEnabled else { return }
                         settings.setSmartCleanupPass(enabled)
                     }
+                    .disabled(!llmConfigured)
+            } footer: {
+                Text("Uses the configured LLM to remove fillers, apply self-corrections and match app tone. If unavailable, the original transcript is used. Configure an LLM model in Advanced to enable this.")
+            }
+
+            Section {
                 Toggle("Better hearing in loud rooms", isOn: $noiseHandling)
                     .onChange(of: noiseHandling) { _, enabled in
                         settings.setExperimentalNoiseHandling(enabled)
                     }
-                Toggle("Live transcription", isOn: $liveTranscription)
-                    .onChange(of: liveTranscription) { _, enabled in
-                        settings.setLiveTranscription(enabled)
-                        // Switching it on is an explicit "try again" — clear the
-                        // streak that suppressed it, but keep the history so the
-                        // footer still tells the truth about how it has gone.
-                        if enabled { LiveStats().clearStreak() }
-                    }
-                    // The legacy transport is a different endpoint entirely, so
-                    // live cannot run alongside it. Disabling the control says so;
-                    // leaving it tappable but inert is the exact silent no-op this
-                    // app keeps writing comments about.
-                    .disabled(settings.usesLegacyTranscribeEndpoint)
             } header: {
                 Text("Experimental")
             } footer: {
-                if settings.usesLegacyTranscribeEndpoint {
-                    Text("Live transcription is unavailable while the legacy transcription endpoint is on in Advanced.")
-                } else {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Tone runs a second model over the transcript so email reads like email and chat like chat — it adds about half a second and sends the transcript text once more. Loud rooms judges your voice against the actual room noise instead of a fixed level. Live streams your voice as you speak instead of uploading at the end — if the connection stumbles it quietly falls back to the normal upload, so nothing is ever lost. All off by default.")
-                        // Live failing is invisible by design — it just looks like
-                        // a slower dictation — so without this the question "is it
-                        // actually working?" has no answer.
-                        if let summary = LiveStats().summary {
-                            Text(summary)
-                        }
-                    }
-                }
+                Text("Judges your voice against the room noise instead of a fixed level. Off by default.")
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .gtSettingDidChange).receive(on: RunLoop.main)) { note in
-            if note.object as? String == "smartTranscription" {
-                smartTranscription = settings.smartTranscriptionEnabled
-            }
-            if note.object as? String == "liveTranscription" {
-                liveTranscription = settings.liveTranscription
+            if note.object as? String == "openAIConfig" {
+                llmConfigured = !settings.apiConfig.llmModel.isEmpty
             }
             // Auto-degrade flips this one off after three gate trips, so a stale
             // ON toggle would make the user's next tap a silent no-op.
@@ -420,14 +388,14 @@ struct PrivacyPane: View {
             }
 
             Section {
-                LabeledContent("Audio") { Text("Sent to the Gemini API with your key") }
-                LabeledContent("Transcript text") { Text("Only if tone matching is on — otherwise it never leaves") }
-                LabeledContent("Dictionary terms") { Text("Sent with the audio, so names are spelled right as you speak") }
+                LabeledContent("Audio") { Text("Sent as WAV to your configured API") }
+                LabeledContent("Transcript text") { Text("Sent for LLM cleanup only when enabled") }
+                LabeledContent("Dictionary terms") { Text("Sent as recognition hints and cleanup context") }
                 LabeledContent("Everything else") { Text("Never leaves this Mac") }
             } header: {
                 Text("What leaves your Mac")
             } footer: {
-                Text("No middleman server, no account, no analytics, no screenshots, no keystroke logging. One network host.")
+                Text("No Jot server, analytics, screenshots or keystroke logging. Your configured API provider handles the data you send.")
             }
 
             Section {
@@ -448,165 +416,114 @@ struct PrivacyPane: View {
 // MARK: - Advanced
 
 struct AdvancedPane: View {
-    private let settings = SettingsStore()
-    /// Placeholders derive from the REAL defaults — a hardcoded string went
-    /// stale the day the preview model was retired (dogfood).
-    private static let defaultConfig = GeminiConfig()
-    @State private var apiKey = ""
-    @State private var keyStatus: KeyStatus = KeychainStore.loadAPIKey() == nil ? .missing : .stored
-    @State private var endpoint = SettingsStore().endpointOverride ?? ""
-    @State private var transcribeModel = SettingsStore().transcribeModelOverride ?? ""
-    @State private var cleanupModel = SettingsStore().cleanupModelOverride ?? ""
-
-    enum KeyStatus { case missing, stored, validating, valid, invalid, saveFailed, savedOffline }
-
-    private var hasStoredKey: Bool { keyStatus == .stored || keyStatus == .valid || keyStatus == .savedOffline }
-
-    private var endpointLooksBroken: Bool {
-        // Same predicate the effective config uses — the warning and reality
-        // can never drift apart (SettingsStore.usableEndpointURL).
-        let trimmed = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !trimmed.isEmpty && SettingsStore.usableEndpointURL(trimmed) == nil
-    }
-    @State private var legacyEndpoint = SettingsStore().usesLegacyTranscribeEndpoint
-
     var body: some View {
         Form {
             Section {
-                HStack {
-                    SecureField("API key", text: $apiKey,
-                                prompt: Text(hasStoredKey ? "••••••••  (stored in Keychain)" : "Paste your key"))
-                        .font(JotUI.TypeScale.code)
-                    keyStatusBadge
-                }
-                if keyStatus == .invalid, KeychainStore.loadAPIKey() != nil {
-                    Text("That key didn't work — your saved key is unchanged.")
-                        .font(JotUI.TypeScale.labelSmall())
-                        .foregroundStyle(JotUI.Colors.error)
-                }
-                if keyStatus == .saveFailed {
-                    Text("The key validated but couldn't be saved to your Keychain — try again.")
-                        .font(JotUI.TypeScale.labelSmall())
-                        .foregroundStyle(JotUI.Colors.error)
-                }
-                if keyStatus == .savedOffline {
-                    Text("You look offline — key saved; it'll be checked on your first dictation.")
-                        .font(JotUI.TypeScale.labelSmall())
-                        .foregroundStyle(.secondary)
-                }
-                HStack {
-                    Button("Save & Validate") { saveAndValidate() }
-                        .disabled(apiKey.trimmingCharacters(in: .whitespaces).isEmpty)
-                    if hasStoredKey {
-                        Button("Remove Key…", role: .destructive) { removeKey() }
-                    }
-                    Spacer()
-                    Link("Get a key in Google AI Studio", destination: URL(string: "https://aistudio.google.com/apikey")!)
-                        .font(JotUI.TypeScale.labelSmall())
-                }
+                APIConfigurationEditor()
             } header: {
-                Text("Gemini API key")
+                Text("OpenAI-compatible API")
             } footer: {
-                Text("Stored in your Mac's Keychain and only ever sent to Google.")
+                Text("The key stays in your Mac's Keychain. ASR and LLM share this Base URL and key. LLM cleanup is optional and off by default.")
             }
+        }
+    }
+}
 
-            Section {
-                TextField("Endpoint", text: $endpoint,
-                          prompt: Text(Self.defaultConfig.endpoint.absoluteString))
-                    .font(JotUI.TypeScale.code)
-                    .onChange(of: endpoint) { _, value in
-                        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                        settings.setEndpointOverride(trimmed.isEmpty ? nil : trimmed)
+struct APIConfigurationEditor: View {
+    var onSaved: (() -> Void)? = nil
+    private let settings = SettingsStore()
+    @State private var config = SettingsStore().apiConfig
+    @State private var storedConfig = SettingsStore().apiConfig
+    @State private var key = ""
+    @State private var hasStoredKey = KeychainStore.loadAPIKey() != nil
+    @State private var checking = false
+    @State private var notice: String?
+    @State private var failed = false
+    @State private var savedUnverified = false
+
+    private var needsNewKey: Bool { config.endpoint != storedConfig.endpoint }
+    private var canSave: Bool {
+        config.isConfigured && (!key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (hasStoredKey && !needsNewKey))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: JotUI.Spacing.s) {
+            TextField("Base URL", text: $config.baseURL, prompt: Text("https://example.com/v1"))
+            SecureField("API Key", text: $key, prompt: Text(hasStoredKey && !needsNewKey ? "Stored in Keychain" : "API key"))
+            TextField("ASR Model", text: $config.asrModel, prompt: Text("Qwen/Qwen3-ASR-1.7B"))
+            TextField("LLM Model (optional)", text: $config.llmModel)
+            if !config.baseURL.isEmpty, config.endpoint == nil {
+                Text("Enter an http(s) URL with a host and API prefix, without credentials or query parameters.")
+                    .foregroundStyle(JotUI.Colors.error)
+                    .font(JotUI.TypeScale.labelSmall())
+            }
+            if hasStoredKey && needsNewKey {
+                Text("Re-enter the key for the new Base URL.")
+                    .font(JotUI.TypeScale.labelSmall())
+            }
+            if let notice {
+                Text(notice)
+                    .font(JotUI.TypeScale.labelSmall())
+                    .foregroundStyle(failed ? JotUI.Colors.error : JotUI.Colors.onSurfaceVariant)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack {
+                Button(onSaved == nil ? "Save & Check Connection" : "Save & Continue", action: save)
+                    .disabled(!canSave || checking)
+                if checking { ProgressView().controlSize(.small) }
+                if hasStoredKey, !checking {
+                    Button("Remove Key", role: .destructive) {
+                        KeychainStore.deleteAPIKey(notify: true)
+                        hasStoredKey = false
+                        key = ""
+                        notice = nil
+                        savedUnverified = false
                     }
-                if endpointLooksBroken {
-                    Text("Not a valid http(s) URL — the default endpoint is being used.")
-                        .font(JotUI.TypeScale.labelSmall())
-                        .foregroundStyle(JotUI.Colors.error)
                 }
-                TextField("Transcription model", text: $transcribeModel,
-                          prompt: Text(Self.defaultConfig.transcribeModel))
-                    .font(JotUI.TypeScale.code)
-                    .onChange(of: transcribeModel) { _, value in
-                        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                        settings.setTranscribeModelOverride(trimmed.isEmpty ? nil : trimmed)
-                    }
-                TextField("Formatting model", text: $cleanupModel,
-                          prompt: Text(Self.defaultConfig.cleanupModel))
-                    .font(JotUI.TypeScale.code)
-                    .onChange(of: cleanupModel) { _, value in
-                        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                        settings.setCleanupModelOverride(trimmed.isEmpty ? nil : trimmed)
-                    }
-            } header: {
-                Text("Model overrides")
-            } footer: {
-                Text("Preview models get renamed — override here if a model 404s. Leave blank for defaults — every edit saves as you type.")
             }
-
-            Section {
-                Toggle("Use the previous transcription endpoint", isOn: $legacyEndpoint)
-                    .onChange(of: legacyEndpoint) { _, enabled in
-                        settings.setLegacyTranscribeEndpoint(enabled)
-                    }
-            } footer: {
-                Text("Jot transcribes through Gemini's newer interactions endpoint, which is what makes Smart transcription possible. If it starts misbehaving, this switches back to the older one — transcription still works, but it will be word-for-word and Smart transcription will have no effect.")
+            if savedUnverified, let onSaved {
+                Button("Continue without verification", action: onSaved)
             }
         }
-        // Key saved elsewhere (onboarding, dev-file migration) while this pane is
-        // open: refresh the badge — but never clobber in-flight feedback.
-        .onReceive(NotificationCenter.default.publisher(for: .gtSettingDidChange).receive(on: RunLoop.main)) { note in
-            if note.object as? String == "apiKey", keyStatus == .missing || keyStatus == .stored {
-                keyStatus = KeychainStore.loadAPIKey() == nil ? .missing : .stored
-            }
-        }
+        .textFieldStyle(.roundedBorder)
+        .font(JotUI.TypeScale.code)
+        .disabled(checking)
     }
 
-    @ViewBuilder
-    private var keyStatusBadge: some View {
-        switch keyStatus {
-        case .missing:
-            Image(systemName: "key.slash").foregroundStyle(.secondary)
-        case .stored, .savedOffline:
-            Image(systemName: "checkmark.circle").foregroundStyle(.secondary)
-        case .validating:
-            ProgressView().controlSize(.small)
-        case .valid:
-            Image(systemName: "checkmark.circle.fill").foregroundStyle(JotUI.Colors.success)
-        case .invalid, .saveFailed:
-            Image(systemName: "xmark.circle.fill").foregroundStyle(JotUI.Colors.error)
-        }
-    }
-
-    private func saveAndValidate() {
-        let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !key.isEmpty else { return }
-        keyStatus = .validating
-        Task {
-            let client = GeminiClient(apiKey: { key })
-            let check = await client.validateKey(endpoint: settings.geminiConfig.endpoint)
-            // Same rule as onboarding: a key the server REJECTED never gets
-            // saved, but a check we simply could not perform must not wall the
-            // user out. The distinction now comes from the response itself
-            // instead of a reachability probe that false-negatives.
-            switch check {
-            case .valid, .unreachable:
-                if KeychainStore.saveAPIKey(key) {
-                    apiKey = ""
-                    keyStatus = check == .valid ? .valid : .savedOffline
-                } else {
-                    // A green check over a lost key is the worst possible lie.
-                    keyStatus = .saveFailed
-                }
-            case .rejected:
-                keyStatus = .invalid
+    private func save() {
+        guard canSave, !checking else { return }
+        let candidate = OpenAIConfig(baseURL: config.baseURL, asrModel: config.asrModel, llmModel: config.llmModel)
+        let enteredKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let candidateKey = enteredKey.isEmpty ? KeychainStore.loadAPIKey() : enteredKey else { return }
+        checking = true
+        failed = false
+        savedUnverified = false
+        notice = nil
+        Task { @MainActor in
+            defer { checking = false }
+            let result = await OpenAIClient(apiKey: candidateKey).checkConnection(config: candidate)
+            if case .rejected(let message) = result {
+                notice = message
+                failed = true
+                return
             }
+            guard enteredKey.isEmpty || KeychainStore.saveAPIKey(candidateKey) else {
+                notice = "Couldn't save the key to your Mac's Keychain. Configuration unchanged."
+                failed = true
+                return
+            }
+            settings.setAPIConfig(candidate)
+            if candidate.llmModel.isEmpty { settings.setSmartCleanupPass(false) }
+            config = candidate
+            storedConfig = candidate
+            key = ""
+            hasStoredKey = true
+            savedUnverified = result != .reachable
+            notice = savedUnverified
+                ? "Saved without verification. The API could not be checked; try a dictation when it is available."
+                : "Saved. Connection reachable; ASR and LLM models have not been tested."
+            if !savedUnverified { onSaved?() }
         }
-    }
-
-    private func removeKey() {
-        KeychainStore.deleteAPIKey(notify: true)
-        apiKey = ""
-        keyStatus = .missing
     }
 }
 
