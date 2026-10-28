@@ -41,6 +41,7 @@ final class DictationController {
     private var elapsedTimer: Timer?
     private var slowTimer: Timer?
     private var dismissTask: Task<Void, Never>?
+    private var accessibilityGranted = AXIsProcessTrusted()
 
     var onStatusChange: ((String) -> Void)?
     var onStatusItemState: ((StatusItemController.VisualState) -> Void)?
@@ -59,9 +60,11 @@ final class DictationController {
                 // Wake Electron/Chromium a11y NOW, while the user is still
                 // speaking — doing it after the transcript exists put a
                 // cross-process stall between their words and seeing them.
-                AccessibilityWaker.wakeIfNeeded(
-                    bundleID: app?.bundleIdentifier, pid: app?.processIdentifier
-                )
+                if SettingsStore().automaticInsertionEnabled, AXIsProcessTrusted() {
+                    AccessibilityWaker.wakeIfNeeded(
+                        bundleID: app?.bundleIdentifier, pid: app?.processIdentifier
+                    )
+                }
                 return DictationContext(
                     targetAppBundleID: app?.bundleIdentifier,
                     targetAppName: app?.localizedName,
@@ -75,7 +78,6 @@ final class DictationController {
         // A deliberate "I'll add it later" is remembered — the wizard must not
         // re-trap that user every launch; the menu bar carries the key nudge.
         (!SettingsStore().apiConfigured && !SettingsStore().hasCompletedOnboarding)
-            || !AXIsProcessTrusted()
             || AVCaptureDevice.authorizationStatus(for: .audio) != .authorized
     }
 
@@ -143,6 +145,16 @@ final class DictationController {
         bind()
         startHistoryServices()
 
+        Timer.publish(every: 1, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in
+                Task { @MainActor in
+                    guard let self, AXIsProcessTrusted() != self.accessibilityGranted else { return }
+                    self.activateEngine()
+                }
+            }
+            .store(in: &cancellables)
+
         // F15: finalize gracefully when the Mac sleeps mid-recording (audit L1).
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.willSleepNotification, object: nil, queue: .main
@@ -180,29 +192,28 @@ final class DictationController {
     private var engineActive = false
 
     private func activateEngine() {
-        if engine.start() {
-            engineActive = true
-            if !SettingsStore().apiConfigured {
-                // New-user path: dictation can't work yet — say exactly where to go.
-                onStatusChange?("Configure your API in Settings → Advanced")
-                onStatusItemState?(.attention)
-            } else {
-                onStatusChange?("Ready — hold \(SettingsStore().hotkeyKey.displayName) to dictate")
-                // Clear a lingering attention icon (auth failure, missing key).
-                onStatusItemState?(.idle)
-                warmEngines.prewarmNext()
-            }
-            hud.show()
-            // Only now does a pill exist to paint into. Called here rather than in
-            // start() because the onboarding path never reaches activateEngine()
-            // until permissions are granted — and the migrating cohort is exactly
-            // the cohort that gets re-prompted.
-            // Idle time, not insert time: Sauce's one-time keyboard-layout
-            // lookup otherwise lands between transcript-ready and ⌘V.
-            Task { @MainActor in PasteInserter.warmKeyboardLayout() }
+        accessibilityGranted = AXIsProcessTrusted()
+        if accessibilityGranted {
+            engineActive = engine.start()
         } else {
-            onStatusChange?("Grant Accessibility to enable the dictation key")
+            engine.stop()
+            engineActive = false
+        }
+        hud.show()
+        if !SettingsStore().apiConfigured {
+            onStatusChange?("Configure your API in Settings → Advanced")
             onStatusItemState?(.attention)
+        } else if AVCaptureDevice.authorizationStatus(for: .audio) != .authorized {
+            reportSetupIncomplete()
+        } else {
+            onStatusChange?(engineActive
+                ? "Ready — hold \(SettingsStore().hotkeyKey.displayName) to dictate"
+                : "Ready — start dictation from the menu bar")
+            onStatusItemState?(.idle)
+            warmEngines.prewarmNext()
+        }
+        if engineActive {
+            Task { @MainActor in PasteInserter.warmKeyboardLayout() }
         }
     }
 
@@ -221,10 +232,6 @@ final class DictationController {
             onClosed: { [weak self] in
                 guard let self else { return }
                 self.onboardingWindow = nil
-                // Unconditional: activateEngine handles every sub-state honestly
-                // (no key → attention + Settings pointer; no AX → attention +
-                // grant message). The old guard left the app INERT with the menu
-                // stuck on "Starting up…" (production pass 2).
                 self.activateEngine()
                 if self.needsOnboarding {
                     self.reportSetupIncomplete()
@@ -242,9 +249,7 @@ final class DictationController {
     /// Names the first missing prerequisite — never leaves the construction
     /// placeholder ("Starting up…") in the menu bar.
     private func reportSetupIncomplete() {
-        if !AXIsProcessTrusted() {
-            onStatusChange?("Grant Accessibility to enable the dictation key")
-        } else if AVCaptureDevice.authorizationStatus(for: .audio) != .authorized {
+        if AVCaptureDevice.authorizationStatus(for: .audio) != .authorized {
             onStatusChange?("Allow microphone access in System Settings to dictate")
         } else {
             onStatusChange?("Configure your API in Settings → Advanced")
@@ -269,7 +274,7 @@ final class DictationController {
         case "hotkeyKey", "doubleTapLock":
             applyHotkeySettings()
             // The menu-bar status line names the key — keep it truthful, but
-            // never overwrite an attention message ("Grant Accessibility…").
+            // never overwrite an attention message.
             if engineActive, SettingsStore().apiConfigured {
                 onStatusChange?("Ready — hold \(SettingsStore().hotkeyKey.displayName) to dictate")
             }
@@ -416,19 +421,14 @@ final class DictationController {
 
     /// UI-initiated hands-free session (idle-dot click, menu item). Note: the
     /// hotkey engine's grammar stays idle for these, so ending the session is via
-    /// the pill's stop button or a press-and-release of the dictation key.
+    /// the pill's stop button or, when authorized, the dictation key.
     func startHandsFree() {
-        // No session without a visible pill and a working stop path: before the
-        // engine is active there is no pill surface and no fn stop gesture — a
-        // hot mic with zero UI (production pass 2).
-        guard engineActive else {
-            if needsOnboarding {
-                presentOnboarding()
-            } else {
-                NSSound.beep()
-            }
+        guard SettingsStore().apiConfigured,
+              AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
+            presentOnboarding()
             return
         }
+        hud.show()
         coordinator.handle(.begin)
         coordinator.handle(.lockIn)
     }

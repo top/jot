@@ -25,6 +25,15 @@ Everything else stays on your Mac. The code is open — verify all of this.
 5. **Connection checks**, on saving configuration, use the same API's `/models`
   endpoint with the key. These checks do not upload recordings or test models.
 
+The LLM thinking checkbox is off by default. With **Do not send (server default)**,
+the default for new or legacy configurations without a saved control, cleanup
+sends no thinking parameter and the server's own default applies. This mode does
+not guarantee thinking is off. Selecting an explicit thinking-control protocol
+sends the enabled/disabled value in each cleanup request. These controls do not
+affect ASR or enable cleanup by themselves. Model/server support is required;
+Jot cannot enforce a setting that a server silently ignores. Rejected controls
+are not removed for a retry; cleanup failures keep the original transcript.
+
 ## What never leaves
 
 - Your history database and stored recordings — audio and transcript text leave
@@ -50,6 +59,22 @@ Everything else stays on your Mac. The code is open — verify all of this.
   "never" disables Retry), plus one-click **Delete all history**.
 - Local files are protected by FileVault if enabled; they are not separately
   encrypted (stated honestly).
+
+## Accessibility and clipboard
+
+Accessibility is optional. Without it, start dictation from the menu bar and
+stop with the recording pill; the global dictation key and automatic input are
+unavailable. Automatic input can also be disabled in Settings → Dictation
+without revoking Accessibility.
+
+Completed foreground dictations replace the system clipboard, even after
+successful automatic input, and remain there until another copy replaces them.
+The previous clipboard is not restored. Recovery and queued retries do not
+change the clipboard. Clipboard writes carry the transient marker to ask
+clipboard managers not to archive transcripts; other applications can still
+read the clipboard, and managers may ignore that marker. macOS clipboard
+features such as Universal Clipboard may also share it according to your system
+settings.
 
 ## The provider's side of the wire
 

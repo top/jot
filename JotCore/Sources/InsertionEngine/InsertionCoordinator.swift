@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import AppKit
+import ApplicationServices
 import Foundation
 
 /// The 3-tier ladder with the two guards that fix Wispr's most-reported bugs:
@@ -22,14 +23,14 @@ import Foundation
 ///   guard 2: secure input active → refuse entirely, no clipboard leak (F18)
 ///
 ///   tier 1: AX kAXSelectedTextAttribute with read-back verification
-///   tier 2: pasteboard + synthesized ⌘V with guarded restore
+///   tier 2: pasteboard + synthesized ⌘V, leaving the transcript on the clipboard
 ///   tier 3: text left on the clipboard, visible hint
 public struct InsertionCoordinator: TextInserting {
     private let paster: PasteInserter
 
     @MainActor
-    public init() {
-        self.paster = PasteInserter()
+    public init(pasteboard: NSPasteboard = .general) {
+        self.paster = PasteInserter(pasteboard: pasteboard)
     }
 
     @MainActor
@@ -38,6 +39,11 @@ public struct InsertionCoordinator: TextInserting {
         if SecureInput.isActive {
             Log.insertion.warning("secure input active at insert time — refusing (text in History only)")
             return .blockedSecureField
+        }
+
+        guard SettingsStore().automaticInsertionEnabled, AXIsProcessTrusted() else {
+            paster.copyOnly(text)
+            return .fellBackToClipboard
         }
 
         // Guard 1: is the user still where they started dictating?
@@ -49,14 +55,18 @@ public struct InsertionCoordinator: TextInserting {
         }
 
         // Tier 1: AX direct insertion.
-        switch await AXInserter.insert(text, targetPID: context.targetPID, bundleID: context.targetAppBundleID) {
+        let result = await AXInserter.insert(text, targetPID: context.targetPID, bundleID: context.targetAppBundleID)
+        guard !SecureInput.isActive else {
+            return .blockedSecureField
+        }
+        paster.copyOnly(text)
+        switch result {
         case .landed:
             Log.insertion.info("inserted via AX")
             return .inserted
         case .focusElsewhere:
             // PROVEN focus theft — a blind ⌘V would paste into the thief.
             // Same treatment as the frontmost-changed guard: chip, never blind.
-            paster.copyOnly(text)
             return .frontmostChanged
         case .notPossible:
             break
@@ -68,10 +78,12 @@ public struct InsertionCoordinator: TextInserting {
            let nowFront = NSWorkspace.shared.frontmostApplication,
            nowFront.processIdentifier != expectedPID {
             Log.insertion.info("frontmost changed during AX attempt — no blind paste")
-            paster.copyOnly(text)
             return .frontmostChanged
         }
 
+        guard SettingsStore().automaticInsertionEnabled, AXIsProcessTrusted() else {
+            return .fellBackToClipboard
+        }
         // Tier 2: guarded paste. Note: "true" means the ⌘V was POSTED — there is
         // no OS-level delivery receipt for synthetic paste (industry-wide floor;
         // the text also stays recoverable in History).
@@ -81,7 +93,6 @@ public struct InsertionCoordinator: TextInserting {
         }
 
         // Tier 3: clipboard floor.
-        paster.copyOnly(text)
         return .fellBackToClipboard
     }
 }

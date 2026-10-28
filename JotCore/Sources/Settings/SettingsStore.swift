@@ -62,7 +62,9 @@ public struct SettingsStore: Sendable {
         guard let data = Self.defaults.dictionary(forKey: "openAIConfig") as? [String: String] else {
             return OpenAIConfig()
         }
-        return OpenAIConfig(baseURL: data["baseURL"] ?? "", asrModel: data["asrModel"] ?? "", llmModel: data["llmModel"] ?? "")
+        return OpenAIConfig(baseURL: data["baseURL"] ?? "", asrModel: data["asrModel"] ?? "", llmModel: data["llmModel"] ?? "",
+            llmThinkingEnabled: data["llmThinkingEnabled"] == "true",
+            llmThinkingControl: LLMThinkingControl(rawValue: data["llmThinkingControl"] ?? "") ?? .none)
     }
 
     public var apiConfigured: Bool {
@@ -70,7 +72,17 @@ public struct SettingsStore: Sendable {
     }
 
     public func setAPIConfig(_ config: OpenAIConfig) {
-        Self.set(["baseURL": config.baseURL, "asrModel": config.asrModel, "llmModel": config.llmModel], forKey: "openAIConfig")
+        Self.set(["baseURL": config.baseURL, "asrModel": config.asrModel, "llmModel": config.llmModel,
+              "llmThinkingEnabled": config.llmThinkingEnabled ? "true" : "false",
+              "llmThinkingControl": config.llmThinkingControl.rawValue], forKey: "openAIConfig")
+    }
+
+    public var automaticInsertionEnabled: Bool {
+        Self.defaults.object(forKey: "automaticInsertion") as? Bool ?? true
+    }
+
+    public func setAutomaticInsertion(_ enabled: Bool) {
+        Self.set(enabled, forKey: "automaticInsertion")
     }
 
     /// Double-tap the dictation key to lock hands-free. OFF by default: firm taps

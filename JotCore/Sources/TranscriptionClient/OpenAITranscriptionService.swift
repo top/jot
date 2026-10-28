@@ -4,7 +4,9 @@ public struct OpenAITranscriptionService: TranscriptionServicing {
     private let settings: SettingsStore
     private let apiKey: @Sendable () -> String?
     private let session: URLSession?
-    static let cleanupDeadline: TimeInterval = 5
+    static func cleanupDeadline(for config: OpenAIConfig) -> TimeInterval {
+        config.llmThinkingControl != .none && config.llmThinkingEnabled ? 20 : 5
+    }
 
     public init(settings: SettingsStore = SettingsStore(), session: URLSession? = nil,
                 apiKey: @escaping @Sendable () -> String? = { KeychainStore.loadAPIKey() }) {
@@ -48,7 +50,7 @@ public struct OpenAITranscriptionService: TranscriptionServicing {
                 tone: PromptV1.toneCategory(forBundleID: context.targetAppBundleID),
                 vocabulary: vocabulary, spellings: dictionary.spellings())
             do {
-                let response = try await client.cleanup(prompt: prompt, config: config, deadline: Self.cleanupDeadline)
+                let response = try await client.cleanup(prompt: prompt, config: config, deadline: Self.cleanupDeadline(for: config))
                 let candidate = ValidationGate.stripArtifacts(response)
                 if ValidationGate.validate(raw: raw, cleaned: candidate).accepted {
                     cleaned = candidate

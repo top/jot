@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import AppKit
+import ApplicationServices
 import Combine
 import ServiceManagement
 import SwiftUI
@@ -304,9 +305,24 @@ struct DictationPane: View {
     @State private var llmConfigured = !SettingsStore().apiConfig.llmModel.isEmpty
     @State private var showIdleDot = SettingsStore().showIdleIndicator
     @State private var noiseHandling = SettingsStore().experimentalNoiseHandling
+    @State private var automaticInsertion = SettingsStore().automaticInsertionEnabled
 
     var body: some View {
         Form {
+            Section {
+                Toggle("Automatically insert text", isOn: $automaticInsertion)
+                    .onChange(of: automaticInsertion) { _, enabled in
+                        settings.setAutomaticInsertion(enabled)
+                    }
+                Button("Open Accessibility Settings") {
+                    let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+                    _ = AXIsProcessTrustedWithOptions(options)
+                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+                }
+            } footer: {
+                Text("Results stay on the clipboard until your next copy, except during secure input. Accessibility is optional and required for automatic input and the global dictation key.")
+            }
+
             Section {
                 Toggle("Sounds", isOn: $sounds)
                     .onChange(of: sounds) { _, enabled in settings.setSoundsEnabled(enabled) }
@@ -339,6 +355,9 @@ struct DictationPane: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .gtSettingDidChange).receive(on: RunLoop.main)) { note in
+            if note.object as? String == "automaticInsertion" {
+                automaticInsertion = settings.automaticInsertionEnabled
+            }
             if note.object as? String == "openAIConfig" {
                 llmConfigured = !settings.apiConfig.llmModel.isEmpty
             }
@@ -452,6 +471,26 @@ struct APIConfigurationEditor: View {
             SecureField("API Key", text: $key, prompt: Text(hasStoredKey && !needsNewKey ? "Stored in Keychain" : "API key"))
             TextField("ASR Model", text: $config.asrModel, prompt: Text("Qwen/Qwen3-ASR-1.7B"))
             TextField("LLM Model (optional)", text: $config.llmModel)
+            Toggle("Enable thinking", isOn: $config.llmThinkingEnabled)
+                .toggleStyle(.checkbox)
+                .disabled(config.llmModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || config.llmThinkingControl == .none)
+            if !config.llmModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Picker("Thinking control", selection: $config.llmThinkingControl) {
+                    Text("Do not send (server default)").tag(LLMThinkingControl.none)
+                    Text("vLLM / Qwen (chat template)").tag(LLMThinkingControl.chatTemplate)
+                    Text("DashScope (enable_thinking)").tag(LLMThinkingControl.enableThinking)
+                    Text("OpenAI (reasoning_effort)").tag(LLMThinkingControl.reasoningEffort)
+                }
+                .onChange(of: config.llmThinkingControl) { _, control in
+                    if control == .none { config.llmThinkingEnabled = false }
+                }
+                Text(config.llmThinkingControl == .none
+                    ? "No thinking parameter is sent; the server's default applies."
+                    : "Cleanup allows 20 seconds with thinking enabled, otherwise 5 seconds. Model support is required.")
+                    .font(JotUI.TypeScale.labelSmall())
+                    .foregroundStyle(JotUI.Colors.onSurfaceVariant)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if !config.baseURL.isEmpty, config.endpoint == nil {
                 Text("Enter an http(s) URL with a host and API prefix, without credentials or query parameters.")
                     .foregroundStyle(JotUI.Colors.error)
@@ -492,7 +531,8 @@ struct APIConfigurationEditor: View {
 
     private func save() {
         guard canSave, !checking else { return }
-        let candidate = OpenAIConfig(baseURL: config.baseURL, asrModel: config.asrModel, llmModel: config.llmModel)
+        let candidate = OpenAIConfig(baseURL: config.baseURL, asrModel: config.asrModel, llmModel: config.llmModel,
+            llmThinkingEnabled: config.llmThinkingEnabled, llmThinkingControl: config.llmThinkingControl)
         let enteredKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let candidateKey = enteredKey.isEmpty ? KeychainStore.loadAPIKey() : enteredKey else { return }
         checking = true

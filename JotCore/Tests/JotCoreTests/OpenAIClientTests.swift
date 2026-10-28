@@ -30,6 +30,81 @@ final class OpenAIClientTests: XCTestCase {
 
     override func tearDown() { MockProtocol.handler = nil }
 
+    func testCleanupDeadlineOnlyIncreasesForExplicitThinking() {
+        for control in LLMThinkingControl.allCases {
+            for enabled in [false, true] {
+                let config = OpenAIConfig(llmThinkingEnabled: enabled, llmThinkingControl: control)
+                XCTAssertEqual(OpenAITranscriptionService.cleanupDeadline(for: config),
+                    control != .none && enabled ? 20 : 5)
+            }
+        }
+    }
+
+    private static func requestBody(_ request: URLRequest) throws -> [String: Any] {
+        var data = request.httpBody ?? Data()
+        if request.httpBody == nil, let stream = request.httpBodyStream {
+            stream.open()
+            defer { stream.close() }
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            while stream.hasBytesAvailable {
+                let count = stream.read(&buffer, maxLength: buffer.count)
+                guard count > 0 else { break }
+                data.append(contentsOf: buffer.prefix(count))
+            }
+        }
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    func testCleanupExplicitlyControlsThinkingForEachProtocol() async throws {
+        for control in LLMThinkingControl.allCases {
+            for enabled in [false, true] {
+                let client = OpenAIClient(apiKey: "test-key", session: session { request in
+                    XCTAssertEqual(request.url?.path, "/v1/chat/completions")
+                    let body = try Self.requestBody(request)
+                    XCTAssertEqual(body["model"] as? String, "llm")
+                    XCTAssertEqual(body["stream"] as? Bool, false)
+                    let messages = try XCTUnwrap(body["messages"] as? [[String: String]])
+                    XCTAssertEqual(messages, [["role": "user", "content": "Clean this."]])
+                    XCTAssertEqual(body.count, control == .none ? 3 : 4)
+                    switch control {
+                    case .none:
+                        XCTAssertNil(body["chat_template_kwargs"])
+                        XCTAssertNil(body["enable_thinking"])
+                        XCTAssertNil(body["reasoning_effort"])
+                    case .chatTemplate:
+                        XCTAssertEqual(body["chat_template_kwargs"] as? [String: Bool], ["enable_thinking": enabled])
+                    case .enableThinking:
+                        XCTAssertEqual(body["enable_thinking"] as? Bool, enabled)
+                    case .reasoningEffort:
+                        XCTAssertEqual(body["reasoning_effort"] as? String, enabled ? "medium" : "none")
+                    }
+                    return (200, Data(#"{"choices":[{"message":{"content":"Cleaned."},"finish_reason":"stop"}]}"#.utf8))
+                })
+                let config = OpenAIConfig(baseURL: "http://localhost:8000/v1", llmModel: "llm",
+                    llmThinkingEnabled: enabled, llmThinkingControl: control)
+                let result = try await client.cleanup(prompt: "Clean this.", config: config, deadline: 2)
+                XCTAssertEqual(result, "Cleaned.")
+            }
+        }
+    }
+
+    func testRejectedThinkingControlDoesNotRetryWithoutIt() async throws {
+        var requests = 0
+        let client = OpenAIClient(apiKey: "test-key", session: session { request in
+            requests += 1
+            let body = try Self.requestBody(request)
+            XCTAssertEqual(body["chat_template_kwargs"] as? [String: Bool], ["enable_thinking": false])
+            return (400, Data(#"{"error":{"message":"Unsupported thinking parameter"}}"#.utf8))
+        })
+        do {
+            _ = try await client.cleanup(prompt: "Clean this.",
+                config: OpenAIConfig(baseURL: "http://localhost:8000/v1", llmModel: "llm", llmThinkingControl: .chatTemplate), deadline: 2)
+            XCTFail("Expected rejection")
+        } catch TranscriptionError.badRequest {
+            XCTAssertEqual(requests, 1)
+        }
+    }
+
     func testTranscriptionUsesConfiguredPrefixAndBearerHeader() async throws {
         let session = session { request in
             XCTAssertEqual(request.url?.absoluteString, "http://localhost:8000/prefix/v1/audio/transcriptions")

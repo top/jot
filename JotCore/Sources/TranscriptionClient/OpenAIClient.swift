@@ -1,14 +1,26 @@
 import Foundation
 
+public enum LLMThinkingControl: String, CaseIterable, Sendable {
+    case none
+    case chatTemplate
+    case enableThinking
+    case reasoningEffort
+}
+
 public struct OpenAIConfig: Sendable, Equatable {
     public var baseURL: String
     public var asrModel: String
     public var llmModel: String
+    public var llmThinkingEnabled: Bool
+    public var llmThinkingControl: LLMThinkingControl
 
-    public init(baseURL: String = "", asrModel: String = "", llmModel: String = "") {
+    public init(baseURL: String = "", asrModel: String = "", llmModel: String = "",
+                llmThinkingEnabled: Bool = false, llmThinkingControl: LLMThinkingControl = .none) {
         self.baseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         self.asrModel = asrModel.trimmingCharacters(in: .whitespacesAndNewlines)
         self.llmModel = llmModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.llmThinkingEnabled = llmThinkingEnabled
+        self.llmThinkingControl = llmThinkingControl
     }
 
     public var endpoint: URL? {
@@ -48,11 +60,22 @@ public actor OpenAIClient {
     }
 
     public func cleanup(prompt: String, config: OpenAIConfig, deadline: TimeInterval) async throws -> String {
-        let body = try JSONSerialization.data(withJSONObject: [
+        var payload: [String: Any] = [
             "model": config.llmModel,
             "messages": [["role": "user", "content": prompt]],
             "stream": false,
-        ])
+        ]
+        switch config.llmThinkingControl {
+        case .none:
+            break
+        case .chatTemplate:
+            payload["chat_template_kwargs"] = ["enable_thinking": config.llmThinkingEnabled]
+        case .enableThinking:
+            payload["enable_thinking"] = config.llmThinkingEnabled
+        case .reasoningEffort:
+            payload["reasoning_effort"] = config.llmThinkingEnabled ? "medium" : "none"
+        }
+        let body = try JSONSerialization.data(withJSONObject: payload)
         let data = try await post(path: "chat/completions", body: body, contentType: "application/json",
                                   config: config, model: config.llmModel, deadline: deadline)
         return try Self.extractCompletion(from: data)

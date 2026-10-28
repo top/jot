@@ -147,6 +147,9 @@ private struct OnboardingFlow: View {
 
     private func advance() {
         var next = Screen(rawValue: screen.rawValue + 1) ?? .done
+        if next == .globeKey, !AXIsProcessTrusted() {
+            next = .done
+        }
         // Skip the Globe screen when the system action is already Do Nothing.
         if next == .globeKey, !FnUsageAdvisor.currentGlobeKeyAction().conflictsWithFnHotkey {
             next = .howTo
@@ -614,7 +617,7 @@ private struct AccessibilityScreen: View {
     @State private var slowGrant = false
 
     var body: some View {
-        ScreenScaffold("Let it type for you.", "macOS needs your OK before Jot can place text at your cursor.") {
+        ScreenScaffold("Let it type for you.", "Optional: enable automatic input and the global dictation key. Without access, start from the menu bar and paste the copied result.") {
             VStack(spacing: JotUI.Spacing.m) {
                 PermissionCard(icon: "keyboard", title: "Accessibility", granted: granted) {
                     let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
@@ -626,7 +629,7 @@ private struct AccessibilityScreen: View {
                         .font(JotUI.TypeScale.labelSmall())
                         .foregroundStyle(JotUI.Colors.onSurfaceVariant)
                 }
-                PrimaryButton(title: "Continue", disabled: !granted, action: onNext)
+                PrimaryButton(title: granted ? "Continue" : "Skip for now", action: onNext)
             }
         }
         .onAppear {
@@ -938,7 +941,9 @@ private struct DoneScreen: View {
     @State private var launchAtLogin = true
 
     var body: some View {
-        ScreenScaffold("You're set.", "Jot lives in your menu bar now. Hold \(SettingsStore().hotkeyKey.displayName) anywhere and start talking.") {
+        ScreenScaffold("You're set.", AXIsProcessTrusted()
+            ? "Jot lives in your menu bar now. Hold \(SettingsStore().hotkeyKey.displayName) anywhere and start talking."
+            : "Start dictation from Jot's menu bar, stop with the recording pill, and paste your result.") {
             VStack(spacing: JotUI.Spacing.m) {
                 // Same voice as the scaffold's subtitle — two type sizes on the
                 // page total (display + body), never three.

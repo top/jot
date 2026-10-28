@@ -23,7 +23,7 @@ final class SettingsLiveUpdateTests: XCTestCase {
 
     override func tearDown() {
         for key in ["showIdleIndicator", "soundsEnabled", "doubleTapLock", "gateTrips",
-                    "experimentalNoiseHandling", "smartCleanupPass", "openAIConfig"] {
+                    "experimentalNoiseHandling", "smartCleanupPass", "openAIConfig", "automaticInsertion"] {
             UserDefaults.standard.removeObject(forKey: key)
         }
     }
@@ -45,6 +45,7 @@ final class SettingsLiveUpdateTests: XCTestCase {
     func testEverySetterPostsItsKey() {
         expectChange(forKey: "showIdleIndicator") { settings.setShowIdleIndicator(false) }
         expectChange(forKey: "soundsEnabled") { settings.setSoundsEnabled(false) }
+        expectChange(forKey: "automaticInsertion") { settings.setAutomaticInsertion(false) }
         expectChange(forKey: "smartCleanupPass") { settings.setSmartCleanupPass(false) }
         expectChange(forKey: "openAIConfig") {
             settings.setAPIConfig(OpenAIConfig(baseURL: "http://localhost:8000/v1", asrModel: "custom-asr"))
@@ -82,6 +83,36 @@ final class SettingsLiveUpdateTests: XCTestCase {
         let config = OpenAIConfig(baseURL: "http://localhost:8000/v1", asrModel: "Qwen/Qwen3-ASR-1.7B", llmModel: "custom-llm")
         settings.setAPIConfig(config)
         XCTAssertEqual(SettingsStore().apiConfig, config)
+    }
+
+    func testThinkingDefaultsOffForNewAndExistingConfigurations() {
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: "openAIConfig")
+        XCTAssertFalse(settings.apiConfig.llmThinkingEnabled)
+        XCTAssertEqual(OpenAIConfig().llmThinkingControl, .none)
+        XCTAssertEqual(settings.apiConfig.llmThinkingControl, .none)
+        defaults.set(["baseURL": "http://localhost:8000/v1", "asrModel": "asr", "llmModel": "llm"], forKey: "openAIConfig")
+        XCTAssertEqual(settings.apiConfig.llmModel, "llm")
+        XCTAssertFalse(settings.apiConfig.llmThinkingEnabled)
+        XCTAssertEqual(settings.apiConfig.llmThinkingControl, .none)
+    }
+
+    func testThinkingConfigurationRoundTrips() {
+        for control in LLMThinkingControl.allCases {
+            for enabled in [false, true] {
+                let config = OpenAIConfig(baseURL: "http://localhost:8000/v1", asrModel: "asr", llmModel: "llm",
+                    llmThinkingEnabled: enabled, llmThinkingControl: control)
+                settings.setAPIConfig(config)
+                XCTAssertEqual(SettingsStore().apiConfig, config)
+            }
+        }
+    }
+
+    func testAutomaticInsertionCanBeDisabled() {
+        UserDefaults.standard.removeObject(forKey: "automaticInsertion")
+        XCTAssertTrue(settings.automaticInsertionEnabled)
+        settings.setAutomaticInsertion(false)
+        XCTAssertFalse(SettingsStore().automaticInsertionEnabled)
     }
 }
 

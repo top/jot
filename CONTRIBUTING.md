@@ -55,6 +55,12 @@ This project follows
    silently discarded.
 6. **No telemetry.** PRs adding analytics, tracking, or phone-home behavior of any
    kind will be declined.
+7. **Permission and thinking controls.** Accessibility must remain optional for
+   menu-bar dictation. Secure input must be checked before copying or inserting
+   a result. The LLM thinking checkbox defaults off; configurations without a
+   saved protocol send no thinking parameter for compatibility. Selected explicit
+   controls must be sent, and rejected controls must never be silently removed
+   for a retry.
 
 ## Getting started
 
