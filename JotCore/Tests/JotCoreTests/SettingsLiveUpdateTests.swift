@@ -47,6 +47,7 @@ final class SettingsLiveUpdateTests: XCTestCase {
         expectChange(forKey: "soundsEnabled") { settings.setSoundsEnabled(false) }
         expectChange(forKey: "automaticInsertion") { settings.setAutomaticInsertion(false) }
         expectChange(forKey: "smartCleanupPass") { settings.setSmartCleanupPass(false) }
+        expectChange(forKey: "selectedPromptId") { settings.setSelectedPromptId("email") }
         expectChange(forKey: "openAIConfig") {
             settings.setAPIConfig(OpenAIConfig(baseURL: "http://localhost:8000/v1", asrModel: "custom-asr"))
         }
@@ -143,6 +144,38 @@ final class DictionaryImportTests: XCTestCase {
         let count = store.importCSV("gemini,\nGemini,\nVeo,\nveo,")
         XCTAssertEqual(count, 1)
         XCTAssertEqual(store.entries().map(\.term), ["Gemini", "Veo"])
+    }
+
+    func testImportHandlesBOM() {
+        let textWithBOM = "\u{feff}深度学习\n大语言模型"
+        let count = store.importText(textWithBOM)
+        XCTAssertEqual(count, 2)
+        XCTAssertEqual(store.entries().map(\.term), ["深度学习", "大语言模型"])
+    }
+
+    func testExportAndReimportCSV() {
+        _ = store.add(term: "Kubernetes")
+        _ = store.add(term: "PyTorch")
+        let exported = store.exportCSV()
+        XCTAssertTrue(exported.contains("Kubernetes"))
+        XCTAssertTrue(exported.contains("PyTorch"))
+
+        UserDefaults.standard.removeObject(forKey: "dictionaryEntries")
+        let reimportedCount = store.importCSV(exported)
+        XCTAssertEqual(reimportedCount, 2)
+        XCTAssertEqual(store.entries().map(\.term), ["Kubernetes", "PyTorch"])
+    }
+
+    func testExportAndImportPlainText() {
+        _ = store.add(term: "SwiftUI")
+        _ = store.add(term: "CoreAudio")
+        let text = store.exportText()
+        XCTAssertEqual(text, "SwiftUI\nCoreAudio")
+
+        UserDefaults.standard.removeObject(forKey: "dictionaryEntries")
+        let imported = store.importText("  SwiftUI  \n\n  CoreAudio  \n  Metal  \n")
+        XCTAssertEqual(imported, 3)
+        XCTAssertEqual(store.entries().map(\.term), ["SwiftUI", "CoreAudio", "Metal"])
     }
 
     func testSpellingsPrioritizeStarred() {

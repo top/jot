@@ -49,8 +49,11 @@ public enum AudioInputDevices {
         guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &ids) == noErr else {
             return []
         }
-        return ids.compactMap { id in
-            guard hasInputStreams(id), let name = name(of: id) else { return nil }
+        return ids.compactMap { id -> Device? in
+            guard hasInputStreams(id) else { return nil }
+            guard !isHidden(id) else { return nil }
+            guard !isPrivateAggregate(id) else { return nil }
+            guard let name = name(of: id), !name.isEmpty else { return nil }
             return Device(id: id, name: name)
         }
     }
@@ -115,6 +118,53 @@ public enum AudioInputDevices {
         )
         var size: UInt32 = 0
         return AudioObjectGetPropertyDataSize(id, &address, 0, nil, &size) == noErr && size > 0
+    }
+
+    private static func isHidden(_ id: AudioDeviceID) -> Bool {
+        var address = AudioObjectPropertyAddress(
+            mSelector: AudioObjectPropertySelector(kAudioDevicePropertyIsHidden),
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var hidden: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectHasProperty(id, &address) else { return false }
+        let status = AudioObjectGetPropertyData(id, &address, 0, nil, &size, &hidden)
+        return status == noErr && hidden != 0
+    }
+
+    private static func transportType(of id: AudioDeviceID) -> UInt32? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: AudioObjectPropertySelector(kAudioDevicePropertyTransportType),
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var transport: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectHasProperty(id, &address) else { return nil }
+        let status = AudioObjectGetPropertyData(id, &address, 0, nil, &size, &transport)
+        return status == noErr ? transport : nil
+    }
+
+    private static func isPrivateAggregate(_ id: AudioDeviceID) -> Bool {
+        guard transportType(of: id) == kAudioDeviceTransportTypeAggregate else { return false }
+        var address = AudioObjectPropertyAddress(
+            mSelector: AudioObjectPropertySelector(kAudioAggregateDevicePropertyComposition),
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        guard AudioObjectHasProperty(id, &address) else { return false }
+        var dict: Unmanaged<CFDictionary>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFDictionary>?>.size)
+        let status = AudioObjectGetPropertyData(id, &address, 0, nil, &size, &dict)
+        guard status == noErr, let composition = dict?.takeRetainedValue() as? [String: Any] else { return false }
+        if let isPrivate = composition[kAudioAggregateDeviceIsPrivateKey as String] as? Bool {
+            return isPrivate
+        }
+        if let isPrivateNum = composition[kAudioAggregateDeviceIsPrivateKey as String] as? NSNumber {
+            return isPrivateNum.boolValue
+        }
+        return false
     }
 
     private static func name(of id: AudioDeviceID) -> String? {

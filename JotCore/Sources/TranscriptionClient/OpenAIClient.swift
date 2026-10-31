@@ -107,6 +107,27 @@ public actor OpenAIClient {
         } catch { return .unreachable }
     }
 
+    public func fetchModels(config: OpenAIConfig) async throws -> [String] {
+        guard let endpoint = config.endpoint else { throw TranscriptionError.badRequest("Enter a valid Base URL.") }
+        var request = URLRequest(url: endpoint.appendingPathComponent("models"))
+        request.timeoutInterval = 10
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await Self.withDeadline(seconds: 10) { [session, request] in
+            try await session.data(for: request)
+        }
+        guard let http = response as? HTTPURLResponse else { throw TranscriptionError.network("non-http") }
+        guard (200...299).contains(http.statusCode) else {
+            let message = Self.errorMessage(from: data) ?? "HTTP \(http.statusCode)"
+            throw TranscriptionError.badRequest(message)
+        }
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let dataArray = json["data"] as? [[String: Any]] else {
+            throw TranscriptionError.network("invalid_models_response")
+        }
+        let ids = dataArray.compactMap { $0["id"] as? String }
+        return ids.sorted()
+    }
+
     private func post(path: String, body: Data, contentType: String, config: OpenAIConfig,
                       model: String, deadline: TimeInterval) async throws -> Data {
         guard let endpoint = config.endpoint, !apiKey.isEmpty else { throw TranscriptionError.auth }

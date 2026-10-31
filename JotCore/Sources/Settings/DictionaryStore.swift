@@ -140,7 +140,34 @@ public struct DictionaryStore: Sendable {
         }
     }
 
-    // MARK: - CSV (data portability)
+    // MARK: - Plain Text & CSV Import/Export
+
+    public func exportText() -> String {
+        entries().map(\.term).joined(separator: "\n")
+    }
+
+    @discardableResult
+    public func importText(_ text: String) -> Int {
+        var cleanText = text
+        if cleanText.hasPrefix("\u{feff}") {
+            cleanText.removeFirst()
+        }
+        let lines = cleanText.components(separatedBy: .newlines)
+        var current = entries()
+        var seen = Set(current.map { $0.term.lowercased() })
+        var imported = 0
+        for line in lines where imported < 1000 {
+            let term = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard (1...60).contains(term.count), !seen.contains(term.lowercased()) else { continue }
+            current.append(DictionaryEntry(term: term))
+            seen.insert(term.lowercased())
+            imported += 1
+        }
+        if imported > 0 {
+            save(current)
+        }
+        return imported
+    }
 
     public func exportCSV() -> String {
         var lines = ["term,misspelling"]
@@ -159,16 +186,28 @@ public struct DictionaryStore: Sendable {
         var records: [String] = []
         var current = ""
         var inQuotes = false
-        for char in csv {
+        let chars = Array(csv)
+        var index = 0
+        while index < chars.count {
+            let char = chars[index]
             if char == "\"" {
-                inQuotes.toggle()
-                current.append(char)
-            } else if !inQuotes, char == "\n" || char == "\r" || char == "\r\n" {
+                if inQuotes, index + 1 < chars.count, chars[index + 1] == "\"" {
+                    current.append("\"\"")
+                    index += 1
+                } else {
+                    inQuotes.toggle()
+                    current.append(char)
+                }
+            } else if !inQuotes, char == "\n" || char == "\r" {
+                if char == "\r", index + 1 < chars.count, chars[index + 1] == "\n" {
+                    index += 1
+                }
                 if !current.isEmpty { records.append(current) }
                 current = ""
             } else {
                 current.append(char)
             }
+            index += 1
         }
         if !current.isEmpty { records.append(current) }
         return records
@@ -176,15 +215,13 @@ public struct DictionaryStore: Sendable {
 
     @discardableResult
     public func importCSV(_ csv: String) -> Int {
-        var lines = splitRecords(csv)
-        // Only drop the first line when its first CELL is exactly a header word —
-        // hasPrefix("term") would eat a real first entry like "terminal" from a
-        // headerless file (audit L30 + settings live-audit).
-        if let first = lines.first {
-            let firstCell = parseCSVLine(first).first?.lowercased() ?? ""
-            if ["term", "word", "phrase"].contains(firstCell) {
-                lines.removeFirst()
-            }
+        var text = csv
+        if text.hasPrefix("\u{feff}") {
+            text.removeFirst()
+        }
+        var lines = splitRecords(text)
+        if let first = lines.first, first.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "term,misspelling" {
+            lines.removeFirst()
         }
         // Batch: one load + one save. Per-row add() re-decodes the whole store
         // from UserDefaults every time — O(n²) and a visible hitch at the cap.

@@ -21,13 +21,37 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+if ! command -v xcodegen &>/dev/null; then
+  echo "Error: xcodegen is required. Install with: brew install xcodegen" >&2
+  exit 1
+fi
+
+echo "▸ Generating Xcode project"
 xcodegen generate
+
 # Some corporate-managed git configs set safe.bareRepository=explicit, which
 # breaks SPM's bare clone cache.
-exec env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all \
+echo "▸ Building Debug app"
+env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all \
   xcodebuild build \
     -project Jot.xcodeproj \
     -scheme Jot \
     -configuration Debug \
     -destination 'platform=macOS,arch=arm64' \
+    -derivedDataPath build/local \
     -quiet "$@"
+
+BUILT_APP="build/local/Build/Products/Debug/Jot.app"
+echo "✓ Successfully built: $BUILT_APP"
+
+if [ -d "$HOME/Applications/Jot.app" ]; then
+  echo "▸ Updating $HOME/Applications/Jot.app"
+  if pgrep -x Jot &>/dev/null; then
+    echo "▸ Closing running Jot instance for update..."
+    pkill -x Jot || true
+    sleep 1
+  fi
+  rm -rf "$HOME/Applications/Jot.app"
+  cp -R "$BUILT_APP" "$HOME/Applications/"
+  echo "✓ Synchronized to $HOME/Applications/Jot.app"
+fi

@@ -5,7 +5,7 @@ public struct OpenAITranscriptionService: TranscriptionServicing {
     private let apiKey: @Sendable () -> String?
     private let session: URLSession?
     static func cleanupDeadline(for config: OpenAIConfig) -> TimeInterval {
-        config.llmThinkingControl != .none && config.llmThinkingEnabled ? 20 : 5
+        60
     }
 
     public init(settings: SettingsStore = SettingsStore(), session: URLSession? = nil,
@@ -48,6 +48,7 @@ public struct OpenAITranscriptionService: TranscriptionServicing {
         if cleanupEnabled {
             let prompt = PromptV1.cleanupPrompt(raw: raw,
                 tone: PromptV1.toneCategory(forBundleID: context.targetAppBundleID),
+                activePromptText: settings.activePromptText,
                 vocabulary: vocabulary, spellings: dictionary.spellings())
             do {
                 let response = try await client.cleanup(prompt: prompt, config: config, deadline: Self.cleanupDeadline(for: config))

@@ -77,8 +77,9 @@ Setup takes about two minutes and the app walks you through it:
 
 1. **Configure Base URL, API Key and ASR Model.** The URL includes the API
   prefix, for example `http://localhost:8000/v1`. The key stays in Keychain.
-  LLM Model is optional. You can skip configuration and add it later in
-  Settings → Advanced.
+  ASR and LLM models can be typed manually or selected via **Fetch Models**.
+  LLM Model is optional. You can skip configuration and tune cleanup prompt presets
+  later in Settings → Advanced.
 2. **Allow the microphone** — say hello and it advances by itself.
 3. **Optionally allow Accessibility** for the global dictation key and automatic
   input. Choose **Skip for now** to use menu-bar dictation and manual paste.
@@ -135,7 +136,7 @@ Protocol references: [vLLM](https://docs.vllm.ai/en/latest/features/reasoning_ou
 [DashScope](https://help.aliyun.com/zh/model-studio/deep-thinking),
 [OpenAI](https://developers.openai.com/api/docs/guides/reasoning).
 
-Connection checking uses `/models` and does not prove that either model works.
+Connection checking and model fetching query `/models` and do not prove that either model works.
 Unsupported or unreachable checks allow saving an unverified configuration.
 Service costs and data handling depend on your provider. Recordings retain the
 existing 10-minute limit. See [release instructions](docs/RELEASING.md) for

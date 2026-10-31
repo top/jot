@@ -16,19 +16,14 @@ import AppKit
 import SwiftUI
 import JotCore
 
-/// The dictionary manager: teach it your words once, they're spelled right forever.
-/// Terms ride in the cleanup prompt; explicit misspelling rules are enforced
-/// deterministically after every dictation.
+/// The personal dictionary: teach it your terms once, they're spelled right forever.
+/// Vocabulary is output directly to ASR and LLM formatting passes.
 struct DictionaryView: View {
     private let store = DictionaryStore()
 
     @State private var entries: [DictionaryEntry] = []
     @State private var newTerm = ""
-    @State private var newMisspelling = ""
-    @State private var search = ""
-    /// Transient feedback under the add row / in the footer ("Already in your
-    /// dictionary", "Imported 12 words") — silence on a failed action reads as
-    /// a broken button.
+    @FocusState private var isInputFocused: Bool
     @State private var feedback: String?
     @Environment(\.colorScheme) private var scheme
     private var grad: CGFloat { scheme == .dark ? 25 : 0 }
@@ -39,93 +34,69 @@ struct DictionaryView: View {
             if entries.isEmpty {
                 emptyState
             } else {
-                entryList
+                tagsView
             }
             footer
         }
-        .onAppear(perform: reload)
+        .onAppear {
+            reload()
+            isInputFocused = true
+        }
     }
 
     private var addRow: some View {
-        HStack(spacing: JotUI.Spacing.xs) {
-            TextField("Add a word or phrase…", text: $newTerm)
+        HStack(spacing: JotUI.Spacing.s) {
+            TextField("Add a term or phrase…", text: $newTerm)
                 .textFieldStyle(.plain)
                 .font(JotUI.TypeScale.body(grad: grad))
-                .onSubmit(add)
-            TextField("Recognized as… (optional)", text: $newMisspelling)
-                .textFieldStyle(.plain)
-                .font(JotUI.TypeScale.body(grad: grad))
-                .foregroundStyle(JotUI.Colors.onSurfaceVariant)
+                .focused($isInputFocused)
                 .onSubmit(add)
             Button(action: add) {
                 Image(systemName: "plus.circle.fill")
-                    .foregroundStyle(newTerm.isEmpty ? JotUI.Colors.onSurfaceVariant : JotUI.Colors.primary)
+                    .font(.system(size: 20))
+                    .foregroundStyle(newTerm.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                     ? JotUI.Colors.onSurfaceVariant.opacity(0.4)
+                                     : JotUI.Colors.primary)
             }
             .buttonStyle(.plain)
-            .disabled(newTerm.isEmpty)
+            .disabled(newTerm.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
         .padding(JotUI.Spacing.s)
         .background(RoundedRectangle(cornerRadius: JotUI.Radius.medium).fill(JotUI.Colors.surfaceContainer))
         .padding(JotUI.Spacing.m)
     }
 
-    private var filtered: [FilteredEntry] {
-        let base = entries.sorted {
-            if $0.starred != $1.starred { return $0.starred }
-            return $0.createdAt > $1.createdAt
-        }
-        let matching = search.isEmpty ? base : base.filter {
-            $0.term.localizedCaseInsensitiveContains(search)
-                || ($0.misspelling?.localizedCaseInsensitiveContains(search) ?? false)
-        }
-        return matching.map { FilteredEntry(entry: $0) }
-    }
-
-    private struct FilteredEntry: Identifiable {
-        let entry: DictionaryEntry
-        var id: UUID { entry.id }
-    }
-
-    private var entryList: some View {
-        List(filtered) { item in
-            let entry = item.entry
-            HStack(spacing: JotUI.Spacing.s) {
-                Button {
-                    store.toggleStar(id: entry.id)
-                    reload()
-                } label: {
-                    Image(systemName: entry.starred ? "star.fill" : "star")
-                        .foregroundStyle(entry.starred ? JotUI.Colors.gYellow : JotUI.Colors.onSurfaceVariant.opacity(0.5))
-                }
-                .buttonStyle(.plain)
-                .help("Starred words are prioritized")
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(entry.term)
-                        .font(JotUI.TypeScale.body(grad: grad))
-                        .foregroundStyle(JotUI.Colors.onSurface)
-                    if let misspelling = entry.misspelling, !misspelling.isEmpty {
-                        Text("\"\(misspelling)\" → \(entry.term)")
-                            .font(JotUI.TypeScale.labelSmall(grad: grad))
-                            .foregroundStyle(JotUI.Colors.onSurfaceVariant)
+    private var tagsView: some View {
+        ScrollView {
+            FlowLayout(spacing: 8) {
+                ForEach(entries) { entry in
+                    HStack(spacing: 6) {
+                        Text(entry.term)
+                            .font(JotUI.TypeScale.body(grad: grad))
+                            .foregroundStyle(JotUI.Colors.onSurface)
+                        Button {
+                            store.remove(id: entry.id)
+                            reload()
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(JotUI.Colors.onSurfaceVariant)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Delete")
                     }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Capsule().fill(JotUI.Colors.surfaceContainer))
+                    .overlay(
+                        Capsule()
+                            .strokeBorder(JotUI.Colors.outlineVariant.opacity(0.6), lineWidth: 1)
+                    )
                 }
-                Spacer()
-                Button {
-                    store.remove(id: entry.id)
-                    reload()
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 10))
-                        .foregroundStyle(JotUI.Colors.onSurfaceVariant)
-                }
-                .buttonStyle(.plain)
             }
-            .padding(.vertical, 2)
+            .padding(JotUI.Spacing.m)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .listStyle(.inset)
-        .scrollContentBackground(.hidden)
-        .searchable(text: $search, placement: .automatic, prompt: "Search")
     }
 
     private var emptyState: some View {
@@ -152,9 +123,9 @@ struct DictionaryView: View {
                 .font(JotUI.TypeScale.labelSmall(grad: grad))
                 .foregroundStyle(feedback == nil ? JotUI.Colors.onSurfaceVariant : JotUI.Colors.primary)
             Spacer()
-            Button("Import CSV…", action: importCSV)
+            Button("Import…", action: importWords)
                 .font(JotUI.TypeScale.labelSmall(grad: grad))
-            Button("Export CSV…", action: exportCSV)
+            Button("Export…", action: exportWords)
                 .font(JotUI.TypeScale.labelSmall(grad: grad))
                 .disabled(entries.isEmpty)
         }
@@ -165,13 +136,16 @@ struct DictionaryView: View {
     // MARK: - Actions
 
     private func add() {
-        guard store.add(term: newTerm, misspelling: newMisspelling.isEmpty ? nil : newMisspelling) else {
-            let trimmed = newTerm.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = newTerm.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard store.add(term: trimmed) else {
             showFeedback(trimmed.count > 60 ? "Keep terms under 60 characters" : "Already in your dictionary")
+            newTerm = ""
+            isInputFocused = true
             return
         }
         newTerm = ""
-        newMisspelling = ""
+        isInputFocused = true
         reload()
     }
 
@@ -187,28 +161,90 @@ struct DictionaryView: View {
         }
     }
 
-    private func importCSV() {
+    private func importWords() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.commaSeparatedText, .plainText]
+        panel.allowedContentTypes = [.plainText, .text, .commaSeparatedText]
         panel.allowsMultipleSelection = false
-        guard panel.runModal() == .OK, let url = panel.url,
-              let csv = try? String(contentsOf: url, encoding: .utf8) else { return }
-        let count = store.importCSV(csv)
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        let text: String
+        if let utf8 = try? String(contentsOf: url, encoding: .utf8) {
+            text = utf8
+        } else if let utf16 = try? String(contentsOf: url, encoding: .utf16) {
+            text = utf16
+        } else if let latin1 = try? String(contentsOf: url, encoding: .isoLatin1) {
+            text = latin1
+        } else {
+            showFeedback("Could not read file (unsupported encoding)")
+            return
+        }
+
+        let isCSV = url.pathExtension.lowercased() == "csv"
+        let count = isCSV ? store.importCSV(text) : store.importText(text)
         Log.ui.info("Dictionary: imported \(count) entries")
         reload()
         showFeedback(count == 0 ? "Nothing new to import" : "Imported \(count) \(count == 1 ? "word" : "words")")
     }
 
-    private func exportCSV() {
+    private func exportWords() {
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = "jot-dictionary.csv"
+        panel.nameFieldStringValue = "jot-dictionary.txt"
+        panel.allowedContentTypes = [.plainText]
+        panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            try store.exportCSV().write(to: url, atomically: true, encoding: .utf8)
+            let text = store.exportText()
+            try text.write(to: url, atomically: true, encoding: .utf8)
             showFeedback("Exported \(entries.count) \(entries.count == 1 ? "word" : "words")")
         } catch {
             Log.ui.error("Dictionary export failed: \(error)")
             showFeedback("Export failed — couldn't write the file")
+        }
+    }
+}
+
+// MARK: - Flow / Wrapping Tags Layout
+
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxW = proposal.width ?? .infinity
+        var currentX: CGFloat = 0
+        var currentY: CGFloat = 0
+        var lineHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if currentX + size.width > maxW && currentX > 0 {
+                currentX = 0
+                currentY += lineHeight + spacing
+                lineHeight = 0
+            }
+            currentX += size.width + spacing
+            lineHeight = max(lineHeight, size.height)
+        }
+
+        return CGSize(width: maxW.isFinite ? maxW : currentX, height: currentY + lineHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var currentX = bounds.minX
+        var currentY = bounds.minY
+        var lineHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if currentX + size.width > bounds.maxX && currentX > bounds.minX {
+                currentX = bounds.minX
+                currentY += lineHeight + spacing
+                lineHeight = 0
+            }
+            subview.place(at: CGPoint(x: currentX, y: currentY), proposal: ProposedViewSize(size))
+            currentX += size.width + spacing
+            lineHeight = max(lineHeight, size.height)
         }
     }
 }

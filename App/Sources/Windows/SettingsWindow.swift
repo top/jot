@@ -435,15 +435,378 @@ struct PrivacyPane: View {
 // MARK: - Advanced
 
 struct AdvancedPane: View {
+    private let settings = SettingsStore()
+    @State private var config = SettingsStore().apiConfig
+    @State private var storedConfig = SettingsStore().apiConfig
+    @State private var apiKey = ""
+    @State private var hasStoredKey = KeychainStore.loadAPIKey() != nil
+
+    enum StatusKind: Equatable {
+        case idle
+        case inProgress(String)
+        case success(String)
+        case error(String)
+
+        var isInProgress: Bool {
+            if case .inProgress = self { return true }
+            return false
+        }
+    }
+    @State private var status: StatusKind = .idle
+    @State private var fetchedModels: [String] = []
+
+    @State private var cleanupPass = SettingsStore().smartCleanupPassEnabled
+    @State private var promptPresets: [PromptPreset] = SettingsStore().promptPresets
+    @State private var selectedPromptId: String = SettingsStore().selectedPromptId
+    @State private var expandedPromptId: String? = nil
+
+    private var needsNewKey: Bool { config.endpoint != storedConfig.endpoint }
+    private var effectiveKey: String? {
+        let entered = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        return entered.isEmpty ? KeychainStore.loadAPIKey() : entered
+    }
+    private var canTest: Bool {
+        config.endpoint != nil && (effectiveKey?.isEmpty == false)
+    }
+    private var canSave: Bool {
+        config.isConfigured && (!apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (hasStoredKey && !needsNewKey))
+    }
+
     var body: some View {
         Form {
-            Section {
-                APIConfigurationEditor()
-            } header: {
-                Text("OpenAI-compatible API")
-            } footer: {
-                Text("The key stays in your Mac's Keychain. ASR and LLM share this Base URL and key. LLM cleanup is optional and off by default.")
+            apiProviderSection
+            asrSection
+            llmSection
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .gtSettingDidChange).receive(on: RunLoop.main)) { note in
+            if note.object as? String == "smartCleanupPass" {
+                cleanupPass = settings.smartCleanupPassEnabled
             }
+        }
+    }
+
+    // MARK: - Section 1: API Provider
+
+    private var apiProviderSection: some View {
+        Section {
+            TextField("Base URL", text: $config.baseURL, prompt: Text("https://example.com/v1"))
+            SecureField("API Key", text: $apiKey, prompt: Text(hasStoredKey && !needsNewKey ? "Stored in Keychain" : "Enter API key"))
+
+            if !config.baseURL.isEmpty, config.endpoint == nil {
+                Text("Enter an http(s) URL with a host and API prefix, without credentials or query parameters.")
+                    .foregroundStyle(JotUI.Colors.error)
+                    .font(JotUI.TypeScale.labelSmall())
+            }
+            if hasStoredKey && needsNewKey {
+                Text("Re-enter the key for the new Base URL.")
+                    .font(JotUI.TypeScale.labelSmall())
+                    .foregroundStyle(JotUI.Colors.onSurfaceVariant)
+            }
+
+            HStack(spacing: 8) {
+                Button("Test Connection") { testConnection() }
+                    .disabled(!canTest || status.isInProgress)
+
+                Button("Fetch Models") { fetchModels() }
+                    .disabled(!canTest || status.isInProgress)
+
+                if hasStoredKey {
+                    Button("Remove Key", role: .destructive) { removeKey() }
+                        .disabled(status.isInProgress)
+                }
+
+                Spacer()
+
+                Button("Save Changes") { saveChanges() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!canSave || status.isInProgress)
+            }
+
+            switch status {
+            case .idle:
+                EmptyView()
+            case .inProgress(let message):
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text(message)
+                        .font(JotUI.TypeScale.labelSmall())
+                        .foregroundStyle(JotUI.Colors.onSurfaceVariant)
+                }
+            case .success(let message):
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(JotUI.Colors.success)
+                    Text(message)
+                        .font(JotUI.TypeScale.labelSmall())
+                        .foregroundStyle(JotUI.Colors.success)
+                }
+            case .error(let message):
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(JotUI.Colors.error)
+                    Text(message)
+                        .font(JotUI.TypeScale.labelSmall())
+                        .foregroundStyle(JotUI.Colors.error)
+                }
+            }
+        } header: {
+            Text("API Provider")
+        } footer: {
+            Text("Your API key is stored securely in macOS Keychain. ASR and LLM share this provider.")
+        }
+    }
+
+    // MARK: - Section 2: Speech Recognition (ASR)
+
+    private var asrSection: some View {
+        Section {
+            if !fetchedModels.isEmpty {
+                Picker("Choose Model", selection: $config.asrModel) {
+                    if !fetchedModels.contains(config.asrModel) && !config.asrModel.isEmpty {
+                        Text(config.asrModel).tag(config.asrModel)
+                    }
+                    ForEach(fetchedModels, id: \.self) { model in
+                        Text(model).tag(model)
+                    }
+                }
+            }
+
+            TextField("ASR Model", text: $config.asrModel, prompt: Text("e.g. Qwen/Qwen3-ASR-1.7B"))
+        } header: {
+            Text("Speech Recognition (ASR)")
+        } footer: {
+            Text("Audio transcription model. You can type manually or pick from fetched models.")
+        }
+    }
+
+    // MARK: - Section 3: Text Polish & Tone (LLM)
+
+    private var llmSection: some View {
+        Section {
+            Toggle("Enable text polish", isOn: $cleanupPass)
+                .onChange(of: cleanupPass) { _, enabled in
+                    settings.setSmartCleanupPass(enabled)
+                }
+
+            if cleanupPass {
+                if !fetchedModels.isEmpty {
+                    Picker("Choose Model", selection: $config.llmModel) {
+                        if !fetchedModels.contains(config.llmModel) && !config.llmModel.isEmpty {
+                            Text(config.llmModel).tag(config.llmModel)
+                        }
+                        ForEach(fetchedModels, id: \.self) { model in
+                            Text(model).tag(model)
+                        }
+                    }
+                }
+
+                TextField("LLM Model", text: $config.llmModel, prompt: Text("e.g. Qwen/Qwen2.5-7B-Instruct"))
+
+                Toggle("Enable thinking", isOn: $config.llmThinkingEnabled)
+                    .disabled(config.llmModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || config.llmThinkingControl == .none)
+
+                if !config.llmModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Picker("Thinking control", selection: $config.llmThinkingControl) {
+                        Text("Do not send (server default)").tag(LLMThinkingControl.none)
+                        Text("vLLM / Qwen (chat template)").tag(LLMThinkingControl.chatTemplate)
+                        Text("DashScope (enable_thinking)").tag(LLMThinkingControl.enableThinking)
+                        Text("OpenAI (reasoning_effort)").tag(LLMThinkingControl.reasoningEffort)
+                    }
+                    .onChange(of: config.llmThinkingControl) { _, control in
+                        if control == .none { config.llmThinkingEnabled = false }
+                    }
+                    Text(config.llmThinkingControl == .none
+                        ? "No thinking parameter is sent; the server's default applies."
+                        : "Cleanup allows up to 60 seconds. Model support is required.")
+                        .font(JotUI.TypeScale.labelSmall())
+                        .foregroundStyle(JotUI.Colors.onSurfaceVariant)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Prompts")
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                        .padding(.top, 4)
+
+                    ForEach(promptPresets) { preset in
+                        promptRow(preset: preset)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+        } header: {
+            Text("Text Polish & Tone (LLM)")
+        } footer: {
+            Text("Applies formatting, punctuation, filler removal, and custom prompt steering.")
+        }
+    }
+
+    private func promptRow(preset: PromptPreset) -> some View {
+        let isSelected = selectedPromptId == preset.id
+        let isExpanded = expandedPromptId == preset.id
+
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Button {
+                    selectedPromptId = preset.id
+                    settings.setSelectedPromptId(preset.id)
+                } label: {
+                    Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
+                        .font(.system(size: 15))
+                        .foregroundStyle(isSelected ? JotUI.Colors.primary : JotUI.Colors.outline)
+                }
+                .buttonStyle(.plain)
+
+                Text(preset.title)
+                    .font(JotUI.TypeScale.body())
+                    .foregroundStyle(JotUI.Colors.onSurface)
+
+                Spacer()
+
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        expandedPromptId = isExpanded ? nil : preset.id
+                    }
+                } label: {
+                    HStack(spacing: 3) {
+                        Text(isExpanded ? "Collapse" : "Edit / View")
+                            .font(JotUI.TypeScale.labelSmall())
+                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 10))
+                    }
+                    .foregroundStyle(JotUI.Colors.primary)
+                }
+                .buttonStyle(.plain)
+            }
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 6) {
+                    TextEditor(text: bindingForPrompt(preset.id))
+                        .font(.system(size: 12))
+                        .frame(minHeight: 80, maxHeight: 160)
+                        .scrollContentBackground(.hidden)
+                        .padding(6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(JotUI.Colors.surfaceContainer)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .strokeBorder(JotUI.Colors.outlineVariant.opacity(0.6), lineWidth: 1)
+                        )
+
+                    HStack {
+                        Spacer()
+                        Button("Reset to Default") {
+                            if let defaultPreset = SettingsStore.defaultPromptPresets.first(where: { $0.id == preset.id }) {
+                                updatePresetText(id: preset.id, text: defaultPreset.promptText)
+                            }
+                        }
+                        .font(JotUI.TypeScale.labelSmall())
+                        .buttonStyle(.link)
+                    }
+                }
+                .padding(.leading, 24)
+                .padding(.top, 2)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func bindingForPrompt(_ id: String) -> Binding<String> {
+        Binding(
+            get: {
+                promptPresets.first(where: { $0.id == id })?.promptText ?? ""
+            },
+            set: { newText in
+                updatePresetText(id: id, text: newText)
+            }
+        )
+    }
+
+    private func updatePresetText(id: String, text: String) {
+        if let idx = promptPresets.firstIndex(where: { $0.id == id }) {
+            promptPresets[idx].promptText = text
+            settings.updatePromptPreset(id: id, newText: text)
+        }
+    }
+
+    // MARK: - Actions
+
+    private func testConnection() {
+        guard let key = effectiveKey, !status.isInProgress else { return }
+        status = .inProgress("Testing connection…")
+        let candidate = OpenAIConfig(baseURL: config.baseURL, asrModel: config.asrModel, llmModel: config.llmModel,
+                                     llmThinkingEnabled: config.llmThinkingEnabled, llmThinkingControl: config.llmThinkingControl)
+        Task { @MainActor in
+            let result = await OpenAIClient(apiKey: key).checkConnection(config: candidate)
+            switch result {
+            case .reachable:
+                status = .success("Connection successful! Server is reachable.")
+            case .rejected(let msg):
+                status = .error("Connection rejected: \(msg)")
+            case .unreachable:
+                status = .error("Unable to reach server. Please check your Base URL and network.")
+            case .unverified:
+                status = .error("Server responded with unexpected status.")
+            }
+        }
+    }
+
+    private func fetchModels() {
+        guard let key = effectiveKey, !status.isInProgress else { return }
+        status = .inProgress("Fetching models…")
+        let candidate = OpenAIConfig(baseURL: config.baseURL, asrModel: config.asrModel, llmModel: config.llmModel,
+                                     llmThinkingEnabled: config.llmThinkingEnabled, llmThinkingControl: config.llmThinkingControl)
+        Task { @MainActor in
+            do {
+                let models = try await OpenAIClient(apiKey: key).fetchModels(config: candidate)
+                fetchedModels = models
+                if models.isEmpty {
+                    status = .error("Models endpoint succeeded but returned no models.")
+                } else {
+                    status = .success("Fetched \(models.count) models successfully.")
+                }
+            } catch let err as TranscriptionError {
+                switch err {
+                case .badRequest(let msg): status = .error("Fetch failed: \(msg)")
+                case .network(let detail): status = .error("Network error: \(detail)")
+                default: status = .error("Fetch failed: \(err)")
+                }
+            } catch {
+                status = .error("Fetch failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func removeKey() {
+        KeychainStore.deleteAPIKey(notify: true)
+        hasStoredKey = false
+        apiKey = ""
+        status = .success("API key removed from Keychain.")
+    }
+
+    private func saveChanges() {
+        guard canSave, !status.isInProgress else { return }
+        let candidate = OpenAIConfig(baseURL: config.baseURL, asrModel: config.asrModel, llmModel: config.llmModel,
+                                     llmThinkingEnabled: config.llmThinkingEnabled, llmThinkingControl: config.llmThinkingControl)
+        let enteredKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let candidateKey = enteredKey.isEmpty ? KeychainStore.loadAPIKey() : enteredKey else { return }
+
+        status = .inProgress("Saving changes…")
+        Task { @MainActor in
+            guard enteredKey.isEmpty || KeychainStore.saveAPIKey(candidateKey) else {
+                status = .error("Couldn't save the key to your Mac's Keychain.")
+                return
+            }
+            settings.setAPIConfig(candidate)
+            if candidate.llmModel.isEmpty { settings.setSmartCleanupPass(false) }
+            config = candidate
+            storedConfig = candidate
+            apiKey = ""
+            hasStoredKey = true
+            status = .success("Changes saved successfully.")
         }
     }
 }
@@ -486,7 +849,7 @@ struct APIConfigurationEditor: View {
                 }
                 Text(config.llmThinkingControl == .none
                     ? "No thinking parameter is sent; the server's default applies."
-                    : "Cleanup allows 20 seconds with thinking enabled, otherwise 5 seconds. Model support is required.")
+                    : "Cleanup allows up to 60 seconds. Model support is required.")
                     .font(JotUI.TypeScale.labelSmall())
                     .foregroundStyle(JotUI.Colors.onSurfaceVariant)
                     .fixedSize(horizontal: false, vertical: true)
@@ -525,7 +888,7 @@ struct APIConfigurationEditor: View {
             }
         }
         .textFieldStyle(.roundedBorder)
-        .font(JotUI.TypeScale.code)
+        .font(JotUI.TypeScale.body())
         .disabled(checking)
     }
 

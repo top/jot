@@ -30,12 +30,11 @@ final class OpenAIClientTests: XCTestCase {
 
     override func tearDown() { MockProtocol.handler = nil }
 
-    func testCleanupDeadlineOnlyIncreasesForExplicitThinking() {
+    func testCleanupDeadlineIsSixtySeconds() {
         for control in LLMThinkingControl.allCases {
             for enabled in [false, true] {
                 let config = OpenAIConfig(llmThinkingEnabled: enabled, llmThinkingControl: control)
-                XCTAssertEqual(OpenAITranscriptionService.cleanupDeadline(for: config),
-                    control != .none && enabled ? 20 : 5)
+                XCTAssertEqual(OpenAITranscriptionService.cleanupDeadline(for: config), 60)
             }
         }
     }
@@ -128,6 +127,25 @@ final class OpenAIClientTests: XCTestCase {
         })
         let result = await client.checkConnection(config: OpenAIConfig(baseURL: "http://localhost:8000/v1", asrModel: "asr"))
         XCTAssertEqual(result, .unverified)
+    }
+
+    func testFetchModelsParsesModelList() async throws {
+        let json = """
+        {
+            "object": "list",
+            "data": [
+                {"id": "whisper-large-v3", "object": "model"},
+                {"id": "qwen-2.5-7b", "object": "model"}
+            ]
+        }
+        """
+        let client = OpenAIClient(apiKey: "test-key", session: session { request in
+            XCTAssertEqual(request.url?.path, "/v1/models")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test-key")
+            return (200, Data(json.utf8))
+        })
+        let models = try await client.fetchModels(config: OpenAIConfig(baseURL: "http://localhost:8000/v1", asrModel: "asr"))
+        XCTAssertEqual(models, ["qwen-2.5-7b", "whisper-large-v3"])
     }
 
     func testCleanupFailurePreservesTranscriptAndDeletesTemporaryWAV() async throws {

@@ -70,10 +70,16 @@ public enum PromptV1 {
     public static func cleanupPrompt(
         raw: String,
         tone: ToneCategory,
+        activePromptText: String? = nil,
         vocabulary: [String] = [],
         spellings: [(wrong: String, right: String)] = []
     ) -> String {
         var sections: [String] = [rules]
+        let hasCustomPrompt = (activePromptText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+            && activePromptText != rules
+        if let custom = activePromptText?.trimmingCharacters(in: .whitespacesAndNewlines), hasCustomPrompt {
+            sections.append(custom)
+        }
         // Dictionary entries are user/CSV data riding inside the prompt — strip
         // newlines and cap length so a crafted entry can't smuggle extra
         // instructions on its own line (audit L31).
@@ -91,14 +97,14 @@ public enum PromptV1 {
             sections.append("Spellings: " + lines.joined(separator: " "))
         }
         sections.append(examples)
-        if !tone.block.isEmpty {
+        if !tone.block.isEmpty && !hasCustomPrompt {
             sections.append(tone.block)
         }
         sections.append("RAW: \(raw)\nCLEAN:")
         return sections.joined(separator: "\n\n")
     }
 
-    static let rules = """
+    public static let rules = """
     You clean up dictated transcripts. Rewrite the raw transcript below into polished written text.
     Rules:
     - Output ONLY the cleaned text. No preamble, no quotes, no commentary.

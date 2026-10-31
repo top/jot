@@ -175,4 +175,60 @@ public struct SettingsStore: Sendable {
         Self.defaults.set(trips, forKey: "gateTrips")
         return trips.count
     }
+
+    // MARK: - Prompts
+
+    public static let defaultPromptPresets: [PromptPreset] = [
+        PromptPreset(id: "general", title: "General Polish", promptText: PromptV1.rules),
+        PromptPreset(id: "email", title: "Professional Email", promptText: "Tone: professional email. Complete sentences; keep greetings and sign-offs as spoken."),
+        PromptPreset(id: "workChat", title: "Work Chat", promptText: "Tone: casual-professional chat message. No trailing period on a single-sentence message."),
+        PromptPreset(id: "personalChat", title: "Personal Chat", promptText: "Tone: informal message. Keep contractions and slang as spoken. No trailing period."),
+        PromptPreset(id: "code", title: "Technical & Code", promptText: "Technical dictation. Preserve identifiers, file names, and casing conventions like camelCase or snake_case exactly as spoken.")
+    ]
+
+    public var selectedPromptId: String {
+        Self.defaults.string(forKey: "selectedPromptId") ?? "general"
+    }
+
+    public func setSelectedPromptId(_ id: String) {
+        Self.set(id, forKey: "selectedPromptId")
+    }
+
+    public var promptPresets: [PromptPreset] {
+        if let data = Self.defaults.data(forKey: "promptPresets"),
+           let presets = try? JSONDecoder().decode([PromptPreset].self, from: data) {
+            return presets
+        }
+        return Self.defaultPromptPresets
+    }
+
+    public func savePromptPresets(_ presets: [PromptPreset]) {
+        if let data = try? JSONEncoder().encode(presets) {
+            Self.set(data, forKey: "promptPresets")
+        }
+    }
+
+    public func updatePromptPreset(id: String, newText: String) {
+        var presets = promptPresets
+        if let index = presets.firstIndex(where: { $0.id == id }) {
+            presets[index].promptText = newText
+            savePromptPresets(presets)
+        }
+    }
+
+    public var activePromptText: String {
+        promptPresets.first(where: { $0.id == selectedPromptId })?.promptText ?? PromptV1.rules
+    }
+}
+
+public struct PromptPreset: Identifiable, Codable, Equatable, Sendable {
+    public var id: String
+    public var title: String
+    public var promptText: String
+
+    public init(id: String, title: String, promptText: String) {
+        self.id = id
+        self.title = title
+        self.promptText = promptText
+    }
 }
