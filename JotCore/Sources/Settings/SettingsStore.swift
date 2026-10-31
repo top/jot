@@ -58,23 +58,182 @@ public struct SettingsStore: Sendable {
         Self.set(done, forKey: "hasCompletedOnboarding")
     }
 
+    public var providers: [APIProvider] {
+        if let data = Self.defaults.data(forKey: "apiProviders"),
+           let decoded = try? JSONDecoder().decode([APIProvider].self, from: data) {
+            return decoded
+        }
+        // Auto-migration on first read if providers is empty
+        let rawDict = Self.defaults.dictionary(forKey: "openAIConfig") as? [String: String] ?? [:]
+        let rawBaseURL = rawDict["baseURL"] ?? ""
+        let legacyKey = KeychainStore.loadAPIKey()
+        let hasStoredKey = !(legacyKey ?? "").isEmpty
+        let isConfigured = OpenAIConfig(baseURL: rawBaseURL).endpoint != nil
+
+        if isConfigured || hasStoredKey {
+            let defaultProvider = APIProvider(
+                id: "default",
+                name: "Default Provider",
+                baseURL: rawBaseURL,
+                cachedModels: []
+            )
+            if let legacyKey, !legacyKey.isEmpty {
+                KeychainStore.saveAPIKey(legacyKey, forProviderId: "default")
+            }
+            let migrated = [defaultProvider]
+            if let encoded = try? JSONEncoder().encode(migrated) {
+                Self.defaults.set(encoded, forKey: "apiProviders")
+            }
+            if Self.defaults.string(forKey: "asrProviderId") == nil {
+                Self.defaults.set("default", forKey: "asrProviderId")
+            }
+            if Self.defaults.string(forKey: "llmProviderId") == nil {
+                Self.defaults.set("default", forKey: "llmProviderId")
+            }
+            return migrated
+        }
+        return []
+    }
+
+    public var asrProviderId: String? {
+        if let id = Self.defaults.string(forKey: "asrProviderId"), !id.isEmpty {
+            return id
+        }
+        return providers.first?.id
+    }
+
+    public var llmProviderId: String? {
+        if let id = Self.defaults.string(forKey: "llmProviderId"), !id.isEmpty {
+            return id
+        }
+        return providers.first?.id
+    }
+
+    private func saveProvidersInternal(_ list: [APIProvider]) {
+        if let data = try? JSONEncoder().encode(list) {
+            Self.defaults.set(data, forKey: "apiProviders")
+            NotificationCenter.default.post(name: .gtSettingDidChange, object: "providers")
+        }
+    }
+
+    public func saveProviders(_ list: [APIProvider]) {
+        saveProvidersInternal(list)
+        NotificationCenter.default.post(name: .gtSettingDidChange, object: "openAIConfig")
+    }
+
+    public func saveProvider(_ provider: APIProvider) {
+        var list = providers
+        if let index = list.firstIndex(where: { $0.id == provider.id }) {
+            list[index] = provider
+        } else {
+            list.append(provider)
+        }
+        saveProviders(list)
+        if Self.defaults.string(forKey: "asrProviderId") == nil {
+            setASRProvider(id: provider.id, model: nil)
+        }
+        if Self.defaults.string(forKey: "llmProviderId") == nil {
+            setLLMProvider(id: provider.id, model: nil)
+        }
+    }
+
+    public func deleteProvider(id: String) {
+        var list = providers
+        list.removeAll { $0.id == id }
+        KeychainStore.deleteAPIKey(forProviderId: id, notify: true)
+        saveProviders(list)
+        if asrProviderId == id {
+            setASRProvider(id: list.first?.id ?? "", model: nil)
+        }
+        if llmProviderId == id {
+            setLLMProvider(id: list.first?.id ?? "", model: nil)
+        }
+    }
+
+    public func setASRProvider(id: String, model: String?) {
+        Self.set(id, forKey: "asrProviderId")
+        var rawDict = Self.defaults.dictionary(forKey: "openAIConfig") as? [String: String] ?? [:]
+        if let p = providers.first(where: { $0.id == id }) {
+            rawDict["baseURL"] = p.baseURL
+        }
+        if let model {
+            rawDict["asrModel"] = model
+        }
+        Self.set(rawDict, forKey: "openAIConfig")
+        NotificationCenter.default.post(name: .gtSettingDidChange, object: "asrProviderId")
+    }
+
+    public func setLLMProvider(id: String, model: String?) {
+        Self.set(id, forKey: "llmProviderId")
+        if let model {
+            setLLMModel(model)
+        }
+        NotificationCenter.default.post(name: .gtSettingDidChange, object: "llmProviderId")
+    }
+
+    public func setASRModel(_ model: String) {
+        var rawDict = Self.defaults.dictionary(forKey: "openAIConfig") as? [String: String] ?? [:]
+        rawDict["asrModel"] = model
+        Self.set(rawDict, forKey: "openAIConfig")
+    }
+
+    public func setLLMModel(_ model: String) {
+        var rawDict = Self.defaults.dictionary(forKey: "openAIConfig") as? [String: String] ?? [:]
+        rawDict["llmModel"] = model
+        Self.set(rawDict, forKey: "openAIConfig")
+    }
+
+    public func setLLMThinking(enabled: Bool, control: LLMThinkingControl) {
+        var rawDict = Self.defaults.dictionary(forKey: "openAIConfig") as? [String: String] ?? [:]
+        rawDict["llmThinkingEnabled"] = enabled ? "true" : "false"
+        rawDict["llmThinkingControl"] = control.rawValue
+        Self.set(rawDict, forKey: "openAIConfig")
+    }
+
     public var apiConfig: OpenAIConfig {
         guard let data = Self.defaults.dictionary(forKey: "openAIConfig") as? [String: String] else {
             return OpenAIConfig()
         }
-        return OpenAIConfig(baseURL: data["baseURL"] ?? "", asrModel: data["asrModel"] ?? "", llmModel: data["llmModel"] ?? "",
+        let asrProvider = providers.first { $0.id == asrProviderId }
+        let baseURL = asrProvider?.baseURL ?? data["baseURL"] ?? ""
+        return OpenAIConfig(
+            baseURL: baseURL,
+            asrModel: data["asrModel"] ?? "",
+            llmModel: data["llmModel"] ?? "",
             llmThinkingEnabled: data["llmThinkingEnabled"] == "true",
-            llmThinkingControl: LLMThinkingControl(rawValue: data["llmThinkingControl"] ?? "") ?? .none)
+            llmThinkingControl: LLMThinkingControl(rawValue: data["llmThinkingControl"] ?? "") ?? .none
+        )
+    }
+
+    public var openAIConfig: OpenAIConfig {
+        apiConfig
     }
 
     public var apiConfigured: Bool {
-        apiConfig.isConfigured && !(KeychainStore.loadAPIKey() ?? "").isEmpty
+        guard let asr = providers.first(where: { $0.id == asrProviderId }) ?? providers.first,
+              asr.isConfigured,
+              !apiConfig.asrModel.isEmpty else {
+            return false
+        }
+        let key = KeychainStore.loadAPIKey(forProviderId: asr.id)
+        return !(key ?? "").isEmpty
     }
 
     public func setAPIConfig(_ config: OpenAIConfig) {
         Self.set(["baseURL": config.baseURL, "asrModel": config.asrModel, "llmModel": config.llmModel,
-              "llmThinkingEnabled": config.llmThinkingEnabled ? "true" : "false",
-              "llmThinkingControl": config.llmThinkingControl.rawValue], forKey: "openAIConfig")
+                  "llmThinkingEnabled": config.llmThinkingEnabled ? "true" : "false",
+                  "llmThinkingControl": config.llmThinkingControl.rawValue], forKey: "openAIConfig")
+
+        var currentProviders = providers
+        if let asrId = asrProviderId, let idx = currentProviders.firstIndex(where: { $0.id == asrId }) {
+            currentProviders[idx].baseURL = config.baseURL
+            saveProvidersInternal(currentProviders)
+        } else if currentProviders.isEmpty && !config.baseURL.isEmpty {
+            let p = APIProvider(id: "default", name: "Default Provider", baseURL: config.baseURL)
+            saveProvidersInternal([p])
+            Self.defaults.set("default", forKey: "asrProviderId")
+            Self.defaults.set("default", forKey: "llmProviderId")
+        }
     }
 
     public var automaticInsertionEnabled: Bool {
@@ -218,6 +377,33 @@ public struct SettingsStore: Sendable {
 
     public var activePromptText: String {
         promptPresets.first(where: { $0.id == selectedPromptId })?.promptText ?? PromptV1.rules
+    }
+}
+
+public struct APIProvider: Identifiable, Codable, Equatable, Sendable {
+    public var id: String
+    public var name: String
+    public var baseURL: String
+    public var cachedModels: [String]
+
+    public init(
+        id: String = UUID().uuidString,
+        name: String,
+        baseURL: String,
+        cachedModels: [String] = []
+    ) {
+        self.id = id
+        self.name = name
+        self.baseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.cachedModels = cachedModels
+    }
+
+    public var endpoint: URL? {
+        OpenAIConfig(baseURL: baseURL).endpoint
+    }
+
+    public var isConfigured: Bool {
+        endpoint != nil
     }
 }
 

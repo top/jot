@@ -25,18 +25,18 @@ struct DictionaryView: View {
     @State private var newTerm = ""
     @FocusState private var isInputFocused: Bool
     @State private var feedback: String?
+    @State private var feedbackTask: Task<Void, Never>?
     @Environment(\.colorScheme) private var scheme
     private var grad: CGFloat { scheme == .dark ? 25 : 0 }
 
     var body: some View {
         VStack(spacing: 0) {
-            addRow
+            header
             if entries.isEmpty {
                 emptyState
             } else {
                 tagsView
             }
-            footer
         }
         .onAppear {
             reload()
@@ -44,26 +44,78 @@ struct DictionaryView: View {
         }
     }
 
+    // MARK: - Header (stats + add)
+
+    private var header: some View {
+        VStack(spacing: JotUI.Spacing.s) {
+            HStack(spacing: JotUI.Spacing.xl) {
+                stat(value: "\(entries.count)", label: entries.count == 1 ? "term" : "terms")
+                if let feedback {
+                    Text(feedback)
+                        .font(JotUI.TypeScale.labelSmall(grad: grad))
+                        .foregroundStyle(JotUI.Colors.primary)
+                }
+                Spacer()
+                HStack(spacing: 3) {
+                    ForEach(0..<4, id: \.self) { index in
+                        Capsule().fill(JotUI.Colors.brandQuad[index])
+                            .frame(width: 12, height: 4)
+                    }
+                }
+                optionsMenu
+            }
+            addRow
+        }
+        .padding(.horizontal, JotUI.Spacing.l)
+        .padding(.top, JotUI.Spacing.l)
+        .padding(.bottom, JotUI.Spacing.s)
+    }
+
+    private var optionsMenu: some View {
+        Menu {
+            Button("Import Terms…", action: importWords)
+            Button("Export Terms…", action: exportWords)
+                .disabled(entries.isEmpty)
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .font(.system(size: 15))
+                .foregroundStyle(.secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+    }
+
+    private func stat(value: String, label: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(value)
+                .font(JotUI.TypeScale.title(grad: grad))
+                .monospacedDigit()
+            Text(label)
+                .font(JotUI.TypeScale.labelSmall(grad: grad))
+                .foregroundStyle(.secondary)
+        }
+    }
+
     private var addRow: some View {
-        HStack(spacing: JotUI.Spacing.s) {
+        HStack(spacing: JotUI.Spacing.xs) {
+            Image(systemName: "plus")
+                .foregroundStyle(.secondary)
             TextField("Add a term or phrase…", text: $newTerm)
                 .textFieldStyle(.plain)
                 .font(JotUI.TypeScale.body(grad: grad))
                 .focused($isInputFocused)
                 .onSubmit(add)
-            Button(action: add) {
-                Image(systemName: "plus.circle.fill")
-                    .font(.system(size: 20))
-                    .foregroundStyle(newTerm.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                     ? JotUI.Colors.onSurfaceVariant.opacity(0.4)
-                                     : JotUI.Colors.primary)
+            if !newTerm.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Button(action: add) {
+                    Image(systemName: "plus.circle.fill")
+                        .foregroundStyle(JotUI.Colors.primary)
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
-            .disabled(newTerm.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
-        .padding(JotUI.Spacing.s)
-        .background(RoundedRectangle(cornerRadius: JotUI.Radius.medium).fill(JotUI.Colors.surfaceContainer))
-        .padding(JotUI.Spacing.m)
+        .padding(.horizontal, JotUI.Spacing.s)
+        .padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: JotUI.Radius.small).fill(.quaternary.opacity(0.5)))
     }
 
     private var tagsView: some View {
@@ -94,7 +146,8 @@ struct DictionaryView: View {
                     )
                 }
             }
-            .padding(JotUI.Spacing.m)
+            .padding(.horizontal, JotUI.Spacing.l)
+            .padding(.vertical, JotUI.Spacing.m)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -115,22 +168,6 @@ struct DictionaryView: View {
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var footer: some View {
-        HStack {
-            Text(feedback ?? "\(entries.count) \(entries.count == 1 ? "word" : "words")")
-                .font(JotUI.TypeScale.labelSmall(grad: grad))
-                .foregroundStyle(feedback == nil ? JotUI.Colors.onSurfaceVariant : JotUI.Colors.primary)
-            Spacer()
-            Button("Import…", action: importWords)
-                .font(JotUI.TypeScale.labelSmall(grad: grad))
-            Button("Export…", action: exportWords)
-                .font(JotUI.TypeScale.labelSmall(grad: grad))
-                .disabled(entries.isEmpty)
-        }
-        .buttonStyle(.link)
-        .padding(JotUI.Spacing.m)
     }
 
     // MARK: - Actions
@@ -154,10 +191,13 @@ struct DictionaryView: View {
     }
 
     private func showFeedback(_ message: String) {
+        feedbackTask?.cancel()
         feedback = message
-        Task {
+        feedbackTask = Task {
             try? await Task.sleep(nanoseconds: 3_000_000_000)
-            feedback = nil
+            if !Task.isCancelled {
+                feedback = nil
+            }
         }
     }
 
@@ -185,7 +225,7 @@ struct DictionaryView: View {
         let count = isCSV ? store.importCSV(text) : store.importText(text)
         Log.ui.info("Dictionary: imported \(count) entries")
         reload()
-        showFeedback(count == 0 ? "Nothing new to import" : "Imported \(count) \(count == 1 ? "word" : "words")")
+        showFeedback(count == 0 ? "Nothing new to import" : "Imported \(count) \(count == 1 ? "term" : "terms")")
     }
 
     private func exportWords() {
@@ -197,7 +237,7 @@ struct DictionaryView: View {
         do {
             let text = store.exportText()
             try text.write(to: url, atomically: true, encoding: .utf8)
-            showFeedback("Exported \(entries.count) \(entries.count == 1 ? "word" : "words")")
+            showFeedback("Exported \(entries.count) \(entries.count == 1 ? "term" : "terms")")
         } catch {
             Log.ui.error("Dictionary export failed: \(error)")
             showFeedback("Export failed — couldn't write the file")

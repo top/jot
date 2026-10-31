@@ -44,7 +44,7 @@ Dictation** in the menu bar and the pill's stop button.
 ## What makes it different
 
 **Optional text cleanup.** A configured LLM can remove filler words, apply
-self-corrections and match app tone. Enable it in Settings → Dictation.
+self-corrections and match app tone. Enable it in Settings → Models.
 If cleanup fails or changes too much, Jot keeps the original transcript.
 
 **It never loses your words.** Audio goes to disk from the first millisecond, so
@@ -75,11 +75,11 @@ ASR service; explicit misspelling replacements are always applied locally.
 
 Setup takes about two minutes and the app walks you through it:
 
-1. **Configure Base URL, API Key and ASR Model.** The URL includes the API
-  prefix, for example `http://localhost:8000/v1`. The key stays in Keychain.
-  ASR and LLM models can be typed manually or selected via **Fetch Models**.
-  LLM Model is optional. You can skip configuration and tune cleanup prompt presets
-  later in Settings → Models.
+1. **Configure API Providers and Models.** Jot supports multiple OpenAI-compatible
+  providers with built-in templates (SiliconFlow, Groq, DeepSeek, OpenAI, Local Ollama,
+  or Custom). Keys stay in your Mac's Keychain and are optional for local endpoints.
+  ASR and LLM models can be assigned to different providers, typed manually, or selected
+  via **Fetch Models**. You can tune cleanup prompt presets anytime in Settings → Models.
 2. **Allow the microphone** — say hello and it advances by itself.
 3. **Optionally allow Accessibility** for the global dictation key and automatic
   input. Choose **Skip for now** to use menu-bar dictation and manual paste.
@@ -87,18 +87,17 @@ Setup takes about two minutes and the app walks you through it:
 
 Each completed foreground dictation replaces the clipboard with its result,
 including when automatic input succeeds. The previous clipboard is not restored;
-the result stays available until your next copy. Disable **Automatically insert
-text** in Settings → Dictation to use manual paste even with Accessibility.
+the result stays available until your next copy. Toggle **Automatically insert
+text** in Settings → General to use manual paste even with Accessibility.
 If the target app changes, Jot does not insert into the newly focused app.
 Secure input remains an exception: in-flight results stay in History only.
 Recovery and queued retries also remain in History without changing the clipboard.
 
 ASR uses `POST /audio/transcriptions`; optional cleanup uses
-`POST /chat/completions`. Both share the configured Base URL and key. Model IDs
-are entered manually, with no built-in provider or model fallback. A Qwen3-ASR
-service must expose the transcription endpoint; Chat-only APIs need a different
-adapter and are not supported. For an unauthenticated local server, use a
-placeholder key such as `EMPTY` if the server accepts it.
+`POST /chat/completions`. ASR and LLM can share the same provider or use completely
+different providers (e.g. Groq for ultra-fast ASR, DeepSeek for text polish). Model IDs
+can be fetched directly with **Fetch Models** or typed manually. For local servers
+like Ollama or faster-whisper, API keys are completely optional.
 
 ### LLM thinking
 
@@ -124,8 +123,7 @@ thinking is disabled; it deliberately leaves inference behavior to the server.
 Jot does not infer support from model names, hide reasoning as a substitute for
 disabling it, or remove rejected parameters and retry. If cleanup is rejected,
 times out, or fails validation, the original transcript is used with local
-dictionary replacements. Cleanup allows 20 seconds when thinking is explicitly
-enabled with a control, otherwise 5 seconds. A server that silently ignores controls cannot provide
+dictionary replacements. Cleanup allows up to 60 seconds. A server that silently ignores controls cannot provide
 a no-thinking guarantee; verify support with your provider.
 
 Accessibility changes are checked every second while Jot is running, including
@@ -207,7 +205,7 @@ Useful while hacking:
 
 ```bash
 # every surface is reachable headlessly
-open "jot://settings/about"      # or /general /dictation /privacy /advanced
+open "jot://settings/about"      # or /general /models (legacy /dictation and /privacy alias cleanly)
 open "jot://history"  "jot://dictionary"  "jot://onboarding/5"
 
 # watch it work
