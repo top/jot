@@ -23,6 +23,11 @@ import JotCore
 struct HistoryPane: View {
     let store: HistoryStore
     let onRetry: (DictationRecord) -> Void
+    let onDeleteAllHistory: () -> Void
+
+    private let settings = SettingsStore()
+    @State private var retentionDays = SettingsStore().audioRetentionDays
+    @State private var confirmingDeleteAll = false
 
     @State private var query = ""
     @State private var records: [DictationRecord] = []
@@ -42,7 +47,10 @@ struct HistoryPane: View {
                 recordList
             }
         }
-        .onAppear(perform: reload)
+        .onAppear {
+            reload()
+            retentionDays = settings.audioRetentionDays
+        }
         // Live pane: dictations landing, retries draining, and deletions all
         // announce themselves — no polling, no guessed delays.
         .onReceive(
@@ -50,6 +58,11 @@ struct HistoryPane: View {
                 .debounce(for: .milliseconds(250), scheduler: RunLoop.main)
         ) { _ in
             reload()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .gtSettingDidChange).receive(on: RunLoop.main)) { note in
+            if note.object as? String == "audioRetentionDays" {
+                retentionDays = settings.audioRetentionDays
+            }
         }
         .sheet(item: $detailRecord) { record in
             RecordDetailSheet(
@@ -79,6 +92,7 @@ struct HistoryPane: View {
                             .frame(width: 12, height: 4)
                     }
                 }
+                optionsMenu
             }
             HStack(spacing: JotUI.Spacing.xs) {
                 Image(systemName: "magnifyingglass")
@@ -95,6 +109,46 @@ struct HistoryPane: View {
         .padding(.horizontal, JotUI.Spacing.l)
         .padding(.top, JotUI.Spacing.l)
         .padding(.bottom, JotUI.Spacing.s)
+    }
+
+    private var optionsMenu: some View {
+        Menu {
+            Section {
+                Picker("Audio retention", selection: $retentionDays) {
+                    Text("Never (disables Retry)").tag(-1)
+                    Text("24 hours").tag(1)
+                    Text("7 days").tag(7)
+                    Text("30 days").tag(30)
+                    Text("Forever").tag(0)
+                }
+            }
+            Divider()
+            Button(role: .destructive) {
+                confirmingDeleteAll = true
+            } label: {
+                Text("Delete All History…")
+            }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .font(.system(size: 15))
+                .foregroundStyle(.secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .confirmationDialog(
+            "Delete all dictation history? Audio and transcripts will be removed from this Mac.",
+            isPresented: $confirmingDeleteAll
+        ) {
+            Button("Delete Everything", role: .destructive) {
+                onDeleteAllHistory()
+            }
+        }
+        .onChange(of: retentionDays) { _, days in
+            settings.setAudioRetentionDays(days)
+            Task.detached(priority: .utility) {
+                RetentionPolicy(audioRetentionDays: days).purgeExpiredAudio()
+            }
+        }
     }
 
     private func stat(value: String, label: String) -> some View {
@@ -255,7 +309,7 @@ struct HistoryPane: View {
         case .failed where record.errorCode == "tooNoisy":
             return "Too noisy — no speech heard"
         case .failed where record.errorCode == "bad_request": return "Couldn't process this one"
-        case .failed where record.errorCode == "model": return "Model not available to your key — see Settings → Advanced"
+        case .failed where record.errorCode == "model": return "Model not available to your key — see Settings → Models"
         case .failed: return "Transcription failed"
         default: return "Recovered recording"
         }

@@ -201,7 +201,7 @@ final class DictationController {
         }
         hud.show()
         if !SettingsStore().apiConfigured {
-            onStatusChange?("Configure your API in Settings → Advanced")
+            onStatusChange?("Configure your API in Settings → Models")
             onStatusItemState?(.attention)
         } else if AVCaptureDevice.authorizationStatus(for: .audio) != .authorized {
             reportSetupIncomplete()
@@ -252,7 +252,7 @@ final class DictationController {
         if AVCaptureDevice.authorizationStatus(for: .audio) != .authorized {
             onStatusChange?("Allow microphone access in System Settings to dictate")
         } else {
-            onStatusChange?("Configure your API in Settings → Advanced")
+            onStatusChange?("Configure your API in Settings → Models")
         }
         onStatusItemState?(.attention)
     }
@@ -292,7 +292,7 @@ final class DictationController {
                 activateEngine()
                 Task { [weak self] in await self?.retryQueue?.drain() }
             } else {
-                onStatusChange?("Configure your API in Settings → Advanced")
+                onStatusChange?("Configure your API in Settings → Models")
                 onStatusItemState?(.attention)
             }
         default:
@@ -336,7 +336,7 @@ final class DictationController {
         queue.onDrainBlocked = { [weak self] error in
             let message: String
             if case .auth = error {
-                message = "Queued dictations are waiting — check your API configuration in Settings → Advanced"
+                message = "Queued dictations are waiting — check your API configuration in Settings → Models"
             } else {
                 message = "Daily quota reached — queued dictations will retry later"
             }
@@ -361,7 +361,16 @@ final class DictationController {
     }
 
     func openSettings(section: String? = nil) {
-        openMainWindow(section: section.flatMap(MainSection.init(rawValue:)) ?? .general)
+        let resolved: MainSection = {
+            guard let section else { return .general }
+            switch section {
+            case "advanced": return .models
+            case "dictation": return .general
+            case "privacy": return .history
+            default: return MainSection(rawValue: section) ?? .general
+            }
+        }()
+        openMainWindow(section: resolved)
     }
 
     func openDictionary() {
@@ -796,7 +805,7 @@ final class DictationController {
                 ? "Configure your API in Settings — recording saved to History"
                 : "API key isn't working — saved to History"
         case .modelAccess:
-            return "Check the Base URL, model and permissions in Settings → Advanced. Saved to History"
+            return "Check the Base URL, model and permissions in Settings → Models. Saved to History"
         case .badRequest: return "API rejected the request — saved to History"
         case .rateLimited: return "Rate limited — History will retry it shortly"
         case .noMicrophone: return "No microphone found — connect one to dictate"

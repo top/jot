@@ -79,7 +79,7 @@ Setup takes about two minutes and the app walks you through it:
   prefix, for example `http://localhost:8000/v1`. The key stays in Keychain.
   ASR and LLM models can be typed manually or selected via **Fetch Models**.
   LLM Model is optional. You can skip configuration and tune cleanup prompt presets
-  later in Settings → Advanced.
+  later in Settings → Models.
 2. **Allow the microphone** — say hello and it advances by itself.
 3. **Optionally allow Accessibility** for the global dictation key and automatic
   input. Choose **Skip for now** to use menu-bar dictation and manual paste.

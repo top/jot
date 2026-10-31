@@ -68,7 +68,7 @@ final class MainWindowController: NSWindowController {
 
 enum MainSection: String, CaseIterable, Identifiable {
     case history, dictionary
-    case general, dictation, privacy, advanced
+    case general, models
     case about
     var id: String { rawValue }
 
@@ -77,9 +77,7 @@ enum MainSection: String, CaseIterable, Identifiable {
         case .history: return "History"
         case .dictionary: return "Dictionary"
         case .general: return "General"
-        case .dictation: return "Dictation"
-        case .privacy: return "Privacy & Storage"
-        case .advanced: return "Advanced"
+        case .models: return "Models"
         case .about: return "About"
         }
     }
@@ -89,9 +87,7 @@ enum MainSection: String, CaseIterable, Identifiable {
         case .history: return "clock.arrow.circlepath"
         case .dictionary: return "character.book.closed.fill"
         case .general: return "gearshape.fill"
-        case .dictation: return "waveform"
-        case .privacy: return "hand.raised.fill"
-        case .advanced: return "wrench.and.screwdriver.fill"
+        case .models: return "cpu"
         case .about: return "info.circle.fill"
         }
     }
@@ -101,15 +97,13 @@ enum MainSection: String, CaseIterable, Identifiable {
         case .history: return JotUI.Colors.gBlue
         case .dictionary: return Color(nsColor: .systemOrange)
         case .general: return Color(nsColor: .systemGray)
-        case .dictation: return Color(nsColor: .systemTeal)
-        case .privacy: return Color(nsColor: .systemGreen)
-        case .advanced: return Color(nsColor: .systemIndigo)
+        case .models: return Color.purple
         case .about: return Color(nsColor: .systemPink)
         }
     }
 
     static let dataSections: [MainSection] = [.history, .dictionary]
-    static let settingsSections: [MainSection] = [.general, .dictation, .privacy, .advanced, .about]
+    static let settingsSections: [MainSection] = [.general, .models, .about]
 }
 
 @MainActor
@@ -168,7 +162,7 @@ private struct MainView: View {
             switch model.selection {
             case .history:
                 if let store {
-                    HistoryPane(store: store, onRetry: onRetry)
+                    HistoryPane(store: store, onRetry: onRetry, onDeleteAllHistory: onDeleteAllHistory)
                 } else {
                     ContentUnavailableView("History unavailable", systemImage: "clock.badge.exclamationmark")
                 }
@@ -176,12 +170,8 @@ private struct MainView: View {
                 DictionaryView()
             case .general:
                 GeneralPane().formStyle(.grouped)
-            case .dictation:
-                DictationPane().formStyle(.grouped)
-            case .privacy:
-                PrivacyPane(onDeleteAllHistory: onDeleteAllHistory).formStyle(.grouped)
-            case .advanced:
-                AdvancedPane().formStyle(.grouped)
+            case .models:
+                ModelsPane().formStyle(.grouped)
             case .about:
                 AboutPane()
             }
@@ -232,7 +222,11 @@ struct GeneralPane: View {
 
     @State private var hotkey = SettingsStore().hotkeyKey
     @State private var doubleTapLock = SettingsStore().doubleTapLockEnabled
+    @State private var automaticInsertion = SettingsStore().automaticInsertionEnabled
+    @State private var sounds = SettingsStore().soundsEnabled
+    @State private var showIdleDot = SettingsStore().showIdleIndicator
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
+    @State private var noiseHandling = SettingsStore().experimentalNoiseHandling
 
     var body: some View {
         Form {
@@ -254,6 +248,26 @@ struct GeneralPane: View {
             }
 
             Section {
+                Toggle("Automatically insert text", isOn: $automaticInsertion)
+                    .onChange(of: automaticInsertion) { _, enabled in
+                        settings.setAutomaticInsertion(enabled)
+                    }
+                Button("Open Accessibility Settings") {
+                    let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+                    _ = AXIsProcessTrustedWithOptions(options)
+                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+                }
+            } header: {
+                Text("Typing & Accessibility")
+            } footer: {
+                Text("Results stay on the clipboard until your next copy, except during secure input. Accessibility is required for automatic typing.")
+            }
+
+            Section {
+                Toggle("Sounds", isOn: $sounds)
+                    .onChange(of: sounds) { _, enabled in settings.setSoundsEnabled(enabled) }
+                Toggle("Show resting indicator", isOn: $showIdleDot)
+                    .onChange(of: showIdleDot) { _, show in settings.setShowIdleIndicator(show) }
                 Toggle("Start Jot at login", isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, enabled in
                         // The failure-path revert below re-enters onChange with the
@@ -271,76 +285,10 @@ struct GeneralPane: View {
                             launchAtLogin = SMAppService.mainApp.status == .enabled
                         }
                     }
-            }
-        }
-        // Login-item state lives in macOS, not in our defaults, so it can change
-        // with the app running — System Settings › General › Login Items turns it
-        // off without telling us. A stale ON toggle is worse than cosmetic here:
-        // the onChange guard above compares against the REAL status, so tapping
-        // the stale toggle decides nothing changed and silently does nothing.
-        // Re-reading on appear also covers reopening the window.
-        .onAppear {
-            launchAtLogin = SMAppService.mainApp.status == .enabled
-            hotkey = settings.hotkeyKey
-            doubleTapLock = settings.doubleTapLockEnabled
-        }
-        // The other panes guard the same way; these two can move under us from
-        // the DEBUG jot://set driver.
-        .onReceive(NotificationCenter.default.publisher(for: .gtSettingDidChange).receive(on: RunLoop.main)) { note in
-            switch note.object as? String {
-            case "hotkeyKey": hotkey = settings.hotkeyKey
-            case "doubleTapLock": doubleTapLock = settings.doubleTapLockEnabled
-            default: break
-            }
-        }
-    }
-}
-
-// MARK: - Dictation
-
-struct DictationPane: View {
-    private let settings = SettingsStore()
-    @State private var sounds = SettingsStore().soundsEnabled
-    @State private var cleanupPass = SettingsStore().smartCleanupPassEnabled
-    @State private var llmConfigured = !SettingsStore().apiConfig.llmModel.isEmpty
-    @State private var showIdleDot = SettingsStore().showIdleIndicator
-    @State private var noiseHandling = SettingsStore().experimentalNoiseHandling
-    @State private var automaticInsertion = SettingsStore().automaticInsertionEnabled
-
-    var body: some View {
-        Form {
-            Section {
-                Toggle("Automatically insert text", isOn: $automaticInsertion)
-                    .onChange(of: automaticInsertion) { _, enabled in
-                        settings.setAutomaticInsertion(enabled)
-                    }
-                Button("Open Accessibility Settings") {
-                    let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-                    _ = AXIsProcessTrustedWithOptions(options)
-                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
-                }
-            } footer: {
-                Text("Results stay on the clipboard until your next copy, except during secure input. Accessibility is optional and required for automatic input and the global dictation key.")
-            }
-
-            Section {
-                Toggle("Sounds", isOn: $sounds)
-                    .onChange(of: sounds) { _, enabled in settings.setSoundsEnabled(enabled) }
-                Toggle("Show resting indicator", isOn: $showIdleDot)
-                    .onChange(of: showIdleDot) { _, show in settings.setShowIdleIndicator(show) }
+            } header: {
+                Text("Appearance & Feedback")
             } footer: {
                 Text("The resting dot grows into a Dictate button on hover; click it for hands-free. Off = the pill appears only while dictating.")
-            }
-
-            Section {
-                Toggle("Polish text and match app tone", isOn: $cleanupPass)
-                    .onChange(of: cleanupPass) { _, enabled in
-                        guard enabled != settings.smartCleanupPassEnabled else { return }
-                        settings.setSmartCleanupPass(enabled)
-                    }
-                    .disabled(!llmConfigured)
-            } footer: {
-                Text("Uses the configured LLM to remove fillers, apply self-corrections and match app tone. If unavailable, the original transcript is used. Configure an LLM model in Advanced to enable this.")
             }
 
             Section {
@@ -354,87 +302,40 @@ struct DictationPane: View {
                 Text("Judges your voice against the room noise instead of a fixed level. Off by default.")
             }
         }
+        // Login-item state lives in macOS, not in our defaults, so it can change
+        // with the app running — System Settings › General › Login Items turns it
+        // off without telling us. A stale ON toggle is worse than cosmetic here:
+        // the onChange guard above compares against the REAL status, so tapping
+        // the stale toggle decides nothing changed and silently does nothing.
+        // Re-reading on appear also covers reopening the window.
+        .onAppear {
+            launchAtLogin = SMAppService.mainApp.status == .enabled
+            hotkey = settings.hotkeyKey
+            doubleTapLock = settings.doubleTapLockEnabled
+            automaticInsertion = settings.automaticInsertionEnabled
+            sounds = settings.soundsEnabled
+            showIdleDot = settings.showIdleIndicator
+            noiseHandling = settings.experimentalNoiseHandling
+        }
+        // The other panes guard the same way; these can move under us from
+        // the DEBUG jot://set driver.
         .onReceive(NotificationCenter.default.publisher(for: .gtSettingDidChange).receive(on: RunLoop.main)) { note in
-            if note.object as? String == "automaticInsertion" {
-                automaticInsertion = settings.automaticInsertionEnabled
-            }
-            if note.object as? String == "openAIConfig" {
-                llmConfigured = !settings.apiConfig.llmModel.isEmpty
-            }
-            // Auto-degrade flips this one off after three gate trips, so a stale
-            // ON toggle would make the user's next tap a silent no-op.
-            if note.object as? String == "smartCleanupPass" {
-                cleanupPass = settings.smartCleanupPassEnabled
-            }
-            // jot://set drives this headlessly in DEBUG — the pane must not show
-            // a stale toggle after the flag moved underneath it.
-            if note.object as? String == "experimentalNoiseHandling" {
-                noiseHandling = settings.experimentalNoiseHandling
+            switch note.object as? String {
+            case "hotkeyKey": hotkey = settings.hotkeyKey
+            case "doubleTapLock": doubleTapLock = settings.doubleTapLockEnabled
+            case "automaticInsertion": automaticInsertion = settings.automaticInsertionEnabled
+            case "soundsEnabled": sounds = settings.soundsEnabled
+            case "showIdleIndicator": showIdleDot = settings.showIdleIndicator
+            case "experimentalNoiseHandling": noiseHandling = settings.experimentalNoiseHandling
+            default: break
             }
         }
     }
 }
 
-// MARK: - Privacy & Storage
+// MARK: - Models
 
-struct PrivacyPane: View {
-    let onDeleteAllHistory: () -> Void
-    private let settings = SettingsStore()
-    @State private var retentionDays = SettingsStore().audioRetentionDays
-    @State private var confirmingDelete = false
-
-    var body: some View {
-        Form {
-            Section {
-                Picker("Keep audio recordings", selection: $retentionDays) {
-                    Text("Never (disables Retry)").tag(-1)
-                    Text("24 hours").tag(1)
-                    Text("7 days").tag(7)
-                    Text("30 days").tag(30)
-                    Text("Forever").tag(0)
-                }
-                .onChange(of: retentionDays) { _, days in
-                    settings.setAudioRetentionDays(days)
-                    // Off the main thread — the purge walks every recording folder
-                    // and would hitch the pane with a large history (the 6h timer
-                    // path already detaches).
-                    Task.detached(priority: .utility) {
-                        RetentionPolicy(audioRetentionDays: days).purgeExpiredAudio()
-                    }
-                }
-            } footer: {
-                Text("Transcripts stay in History until you delete them.")
-            }
-
-            Section {
-                LabeledContent("Audio") { Text("Sent as WAV to your configured API") }
-                LabeledContent("Transcript text") { Text("Sent for LLM cleanup only when enabled") }
-                LabeledContent("Dictionary terms") { Text("Sent as recognition hints and cleanup context") }
-                LabeledContent("Everything else") { Text("Never leaves this Mac") }
-            } header: {
-                Text("What leaves your Mac")
-            } footer: {
-                Text("No Jot server, analytics, screenshots or keystroke logging. Your configured API provider handles the data you send.")
-            }
-
-            Section {
-                Button("Delete All History…", role: .destructive) {
-                    confirmingDelete = true
-                }
-                .confirmationDialog(
-                    "Delete all dictation history? Audio and transcripts will be removed from this Mac.",
-                    isPresented: $confirmingDelete
-                ) {
-                    Button("Delete Everything", role: .destructive) { onDeleteAllHistory() }
-                }
-            }
-        }
-    }
-}
-
-// MARK: - Advanced
-
-struct AdvancedPane: View {
+struct ModelsPane: View {
     private let settings = SettingsStore()
     @State private var config = SettingsStore().apiConfig
     @State private var storedConfig = SettingsStore().apiConfig
