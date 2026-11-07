@@ -58,7 +58,7 @@ public final class EventTapEngine {
     private var doubleTapTimer: DispatchSourceTimer?
     private var healthTimer: DispatchSourceTimer?
 
-    public init(key: HotkeyKey = .fn) {
+    public init(key: HotkeyKey = .rightOption) {
         self.key = key
     }
 

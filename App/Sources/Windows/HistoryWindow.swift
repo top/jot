@@ -417,7 +417,7 @@ struct HistoryPane: View {
             }
             Text("Nothing here yet")
                 .font(JotUI.TypeScale.title(grad: grad))
-            Text("Hold fn and say hello.")
+            Text("Hold \(SettingsStore().hotkeyKey.displayName) and say hello.")
                 .font(JotUI.TypeScale.body(grad: grad))
                 .foregroundStyle(.secondary)
             Spacer()

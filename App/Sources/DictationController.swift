@@ -25,7 +25,7 @@ final class DictationController {
     let coordinator: DictationCoordinator
     /// Idle-time capture-graph prewarming — the key press pays only start().
     private let warmEngines = WarmEnginePool()
-    private let engine = EventTapEngine(key: .fn)
+    private let engine = EventTapEngine(key: .rightOption)
     private let hud = PillHUDController()
     private let earcons = EarconPlayer()
     private let transcriptionService: OpenAITranscriptionService

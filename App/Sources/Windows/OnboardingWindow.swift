@@ -150,8 +150,8 @@ private struct OnboardingFlow: View {
         if next == .globeKey, !AXIsProcessTrusted() {
             next = .done
         }
-        // Skip the Globe screen when the system action is already Do Nothing.
-        if next == .globeKey, !FnUsageAdvisor.currentGlobeKeyAction().conflictsWithFnHotkey {
+        // Skip the Globe screen when not using fn or when the system action is already Do Nothing.
+        if next == .globeKey, (SettingsStore().hotkeyKey != .fn || !FnUsageAdvisor.currentGlobeKeyAction().conflictsWithFnHotkey) {
             next = .howTo
         }
         backStack.append(screen)
@@ -686,6 +686,14 @@ private struct GlobeKeyScreen: View {
                         NSWorkspace.shared.open(FnUsageAdvisor.keyboardSettingsURL)
                     }
                     .buttonStyle(.bordered)
+
+                    Button("Or switch to Right ⌥ (Recommended, no system setup needed)") {
+                        SettingsStore().setHotkeyKey(.rightOption)
+                        onNext()
+                    }
+                    .buttonStyle(.plain)
+                    .font(JotUI.TypeScale.labelSmall())
+                    .foregroundStyle(JotUI.Colors.primary)
                 }
 
                 if FnUsageAdvisor.karabinerIsPresent() {
@@ -949,7 +957,7 @@ private struct DoneScreen: View {
                 // page total (display + body), never three.
                 // "strips your ums" read as jargon to a first-time user (Kat,
                 // from the wild) — name the filler words plainly instead.
-                Text("Optional LLM cleanup removes filler words and applies self-corrections. Enable it in Settings → Dictation after configuring an LLM model. Teach it your jargon in Settings → Dictionary.")
+                Text("Optional LLM cleanup removes filler words and applies self-corrections. Enable it in Settings → Models after configuring an LLM model. Teach it your jargon in Settings → Dictionary.")
                     .font(JotUI.TypeScale.body())
                     .foregroundStyle(JotUI.Colors.onSurfaceVariant)
                     .multilineTextAlignment(.center)

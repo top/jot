@@ -3,7 +3,7 @@ import Foundation
 public struct OpenAITranscriptionService: TranscriptionServicing {
     private let settings: SettingsStore
     private let apiKeyResolver: @Sendable (String) -> String?
-    private let session: URLSession?
+    private let session: URLSession
 
     static func cleanupDeadline(for config: OpenAIConfig) -> TimeInterval {
         60
@@ -16,7 +16,15 @@ public struct OpenAITranscriptionService: TranscriptionServicing {
         apiKeyForProvider: (@Sendable (String) -> String?)? = nil
     ) {
         self.settings = settings
-        self.session = session
+        if let session {
+            self.session = session
+        } else {
+            let configuration = URLSessionConfiguration.default
+            configuration.waitsForConnectivity = false
+            configuration.timeoutIntervalForResource = 600
+            configuration.httpShouldUsePipelining = true
+            self.session = URLSession(configuration: configuration)
+        }
         if let apiKeyForProvider {
             self.apiKeyResolver = apiKeyForProvider
         } else if let apiKey {
@@ -27,6 +35,7 @@ public struct OpenAITranscriptionService: TranscriptionServicing {
     }
 
     public func transcribe(audioURL: URL, durationSeconds: Double, context: DictationContext) async throws -> TranscriptionResult {
+        let startTime = Date()
         let asrProvider = settings.providers.first { $0.id == settings.asrProviderId } ?? settings.providers.first
         let asrBaseURL = asrProvider?.baseURL ?? settings.apiConfig.baseURL
         let asrModel = settings.apiConfig.asrModel
@@ -41,6 +50,8 @@ public struct OpenAITranscriptionService: TranscriptionServicing {
 
         let asrClient = OpenAIClient(apiKey: asrKey, session: session)
         let cleanupEnabled = settings.smartCleanupPassEnabled && !settings.apiConfig.llmModel.isEmpty
+        Log.transcription.info("Pipeline start: asrProvider=\(asrProviderId, privacy: .public), asrModel=\(asrModel, privacy: .public), cleanupEnabled=\(cleanupEnabled)")
+
         let wavURL = audioURL.deletingLastPathComponent().appendingPathComponent("audio.wav")
         defer { try? FileManager.default.removeItem(at: wavURL) }
         let encoded = try WAVEncoder.encode(cafURL: audioURL, wavURL: wavURL)
@@ -49,6 +60,8 @@ public struct OpenAITranscriptionService: TranscriptionServicing {
         let vocabulary = dictionary.sanitizedVocabulary()
         let rules = dictionary.replacementRules()
         let deadline = TimeoutPolicy.overallDeadline(audioDuration: durationSeconds)
+
+        let asrStartTime = Date()
         var raw: String
         do {
             raw = try await asrClient.transcribe(wavData: audio, config: asrConfig, vocabulary: vocabulary, deadline: deadline)
@@ -60,13 +73,14 @@ public struct OpenAITranscriptionService: TranscriptionServicing {
             default: throw error
             }
         }
-        if raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, durationSeconds >= 0.6 {
-            raw = try await asrClient.transcribe(wavData: audio, config: asrConfig, vocabulary: vocabulary, deadline: deadline)
-        }
+        let asrDuration = Date().timeIntervalSince(asrStartTime)
         raw = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else { throw TranscriptionError.emptyTranscript }
+        Log.transcription.info("ASR finished in \(String(format: "%.2f", asrDuration))s (\(raw.count) chars)")
+
         var cleaned = raw
         if cleanupEnabled {
+            let llmStartTime = Date()
             let llmProvider = settings.providers.first { $0.id == settings.llmProviderId } ?? settings.providers.first
             let llmBaseURL = llmProvider?.baseURL ?? settings.apiConfig.baseURL
             let llmModel = settings.apiConfig.llmModel
@@ -81,6 +95,7 @@ public struct OpenAITranscriptionService: TranscriptionServicing {
             )
 
             if let llmKey = apiKeyResolver(llmProviderId), !llmKey.isEmpty, llmConfig.endpoint != nil {
+                Log.transcription.info("Starting text polish pass (LLM): model=\(llmModel, privacy: .public)")
                 let llmClient = OpenAIClient(apiKey: llmKey, session: session)
                 let prompt = PromptV1.cleanupPrompt(
                     raw: raw,
@@ -98,6 +113,8 @@ public struct OpenAITranscriptionService: TranscriptionServicing {
                         settings.setSmartCleanupPass(false)
                         NotificationCenter.default.post(name: .gtSmartFormattingAutoDegraded, object: nil)
                     }
+                    let llmDuration = Date().timeIntervalSince(llmStartTime)
+                    Log.transcription.info("LLM polish completed in \(String(format: "%.2f", llmDuration))s")
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch {
@@ -106,8 +123,14 @@ public struct OpenAITranscriptionService: TranscriptionServicing {
             } else {
                 Log.transcription.info("LLM provider key or endpoint missing; skipping text cleanup")
             }
+        } else {
+            Log.transcription.info("LLM polish disabled — skipping LLM pass entirely")
         }
+
         try Task.checkCancellation()
+        let totalDuration = Date().timeIntervalSince(startTime)
+        Log.transcription.info("Pipeline completed in \(String(format: "%.2f", totalDuration))s")
+
         return TranscriptionResult(
             rawTranscript: raw,
             cleanedTranscript: ReplacementEngine.apply(rules, to: cleaned),

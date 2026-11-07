@@ -240,6 +240,39 @@ struct GeneralPane: View {
                 .onChange(of: hotkey) { _, newKey in
                     settings.setHotkeyKey(newKey)
                 }
+
+                if hotkey == .fn && FnUsageAdvisor.currentGlobeKeyAction().conflictsWithFnHotkey {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(JotUI.Colors.error)
+                            Text("macOS currently uses the 🌐 key for system shortcuts (such as Emoji or input switching), which may cause conflicts.")
+                                .font(JotUI.TypeScale.labelSmall())
+                                .foregroundStyle(JotUI.Colors.error)
+                        }
+                        HStack(spacing: 8) {
+                            Button("Switch to Right ⌥ (Recommended)") {
+                                hotkey = .rightOption
+                                settings.setHotkeyKey(.rightOption)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+
+                            Button("Open Keyboard Settings…") {
+                                NSWorkspace.shared.open(FnUsageAdvisor.keyboardSettingsURL)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+                        .padding(.top, 2)
+                    }
+                    .padding(.vertical, 4)
+                } else if hotkey == .rightOption {
+                    Text("Right ⌥ is the recommended default key. It works on all built-in and external keyboards without system shortcut conflicts.")
+                        .font(JotUI.TypeScale.labelSmall())
+                        .foregroundStyle(JotUI.Colors.onSurfaceVariant)
+                }
+
                 Toggle("Double-tap to lock hands-free", isOn: $doubleTapLock)
                     .onChange(of: doubleTapLock) { _, enabled in
                         settings.setDoubleTapLock(enabled)

@@ -274,7 +274,7 @@ public struct SettingsStore: Sendable {
     }
 
     public var hotkeyKey: HotkeyKey {
-        (Self.defaults.string(forKey: "hotkeyKey")).flatMap(HotkeyKey.init(rawValue:)) ?? .fn
+        (Self.defaults.string(forKey: "hotkeyKey")).flatMap(HotkeyKey.init(rawValue:)) ?? .rightOption
     }
 
     // MARK: - Formatting policy

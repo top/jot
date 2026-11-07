@@ -19,9 +19,9 @@ This is not an officially supported Google product.
 ## What it is
 
 Start from the menu bar, speak, and stop with the recording pill. Your result is
-copied, ready to paste. Optionally grant Accessibility to use the global `fn`
-key and insert text into the app you were already using. Enable optional LLM
-cleanup for filler removal and formatting. No account to make.
+copied, ready to paste. Optionally grant Accessibility to use the global `Right ⌥`
+(Right Option) key and insert text into the app you were already using. Enable optional
+LLM cleanup for filler removal and formatting. No account to make.
 
 <img width="640" height="294" alt="Jot preview" src="https://github.com/user-attachments/assets/669efea9-dbfe-4174-a8fe-748aab818f14" />
 
@@ -33,19 +33,17 @@ while you talk, and a History window that proves nothing was ever lost.
 
 | Gesture | What happens |
 | --- | --- |
-| **Hold `fn`** | Records while held. Release and the text lands at your cursor. |
-| **`fn` + tap `Space`** | Hands-free: keeps recording after you let go. Tap `fn` to finish. |
+| **Hold `Right ⌥`** | Records while held. Release and the text lands at your cursor. |
+| **`Right ⌥` + tap `Space`** | Hands-free: keeps recording after you let go. Tap `Right ⌥` to finish. |
 | **`Esc`** | Cancels. Anything over 10 seconds is still kept in History. |
 
-The key is rebindable in Settings → General if `fn` is spoken for.
+The dictation key defaults to `Right ⌥` (Right Option) because it works universally across Mac and external keyboards without conflicting with macOS system functions. You can rebind it anytime in Settings → General to `fn 🌐`, `Right ⌘`, or `Right ⌃`. If you select `fn 🌐`, Jot automatically detects if macOS has mapped the Globe key to Emoji or Input Source switching and provides a one-click advisor to fix or avoid the conflict.
 These global gestures require Accessibility. Without it, use **Start Hands-Free
 Dictation** in the menu bar and the pill's stop button.
 
 ## What makes it different
 
-**Optional text cleanup.** A configured LLM can remove filler words, apply
-self-corrections and match app tone. Enable it in Settings → Models.
-If cleanup fails or changes too much, Jot keeps the original transcript.
+**Instant ASR response with optional text cleanup.** When LLM cleanup is turned off (the default), audio goes directly to your OpenAI-compatible ASR endpoint over a persistent keep-alive connection, returning results in milliseconds without any unnecessary retries. When enabled in Settings → Models, a configured LLM removes filler words, applies self-corrections, and matches app tone. If cleanup fails or changes too much, Jot keeps the original transcript.
 
 **It never loses your words.** Audio goes to disk from the first millisecond, so
 a crash, a `kill -9`, or a flat battery costs you nothing — the recording is
@@ -83,7 +81,7 @@ Setup takes about two minutes and the app walks you through it:
 2. **Allow the microphone** — say hello and it advances by itself.
 3. **Optionally allow Accessibility** for the global dictation key and automatic
   input. Choose **Skip for now** to use menu-bar dictation and manual paste.
-4. **Start dictating** from the menu bar, or hold `fn` when authorized.
+4. **Start dictating** from the menu bar, or hold `Right ⌥` (or your chosen key) when authorized.
 
 Each completed foreground dictation replaces the clipboard with its result,
 including when automatic input succeeds. The previous clipboard is not restored;
@@ -143,7 +141,7 @@ opening an unnotarized build.
 ## How it works
 
 ```
-fn down ─▶ capture (CAF on disk from t=0) ─▶ fn up ─▶ WAV ─▶ ASR API
+key down ─▶ capture (CAF on disk from t=0) ─▶ key up ─▶ WAV ─▶ ASR API
                                                                     │
   clipboard + optional cursor input ◀─ [validate ◀─ tone pass] ───────┘
                                               (optional, off by default)
