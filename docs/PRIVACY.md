@@ -24,6 +24,11 @@ Everything else stays on your Mac. The code is open — verify all of this.
    macOS Keychain, never in files or preferences.
 5. **Connection checks**, on saving configuration, use the same API's `/models`
   endpoint with the key. These checks do not upload recordings or test models.
+6. **Update checks** (on by default, daily), a `GET` request to GitHub's
+  `releases/latest` API (`api.github.com/repos/top/jot/releases/latest`) to check
+  whether a newer release is available, and downloading the release `.zip` from
+  GitHub after you confirm an update. Uncheck **Automatically check for updates**
+  in Settings → About to stop all update network requests unless you click **Check for Updates**.
 
 The LLM thinking checkbox is off by default. With **Do not send (server default)**,
 the default for new or legacy configurations without a saved control, cleanup

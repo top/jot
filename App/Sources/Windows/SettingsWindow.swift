@@ -29,6 +29,7 @@ final class MainWindowController: NSWindowController {
 
     init(
         store: HistoryStore?,
+        updateManager: AppUpdateManager,
         onRetry: @escaping (DictationRecord) -> Void,
         onDeleteAllHistory: @escaping () -> Void
     ) {
@@ -51,6 +52,7 @@ final class MainWindowController: NSWindowController {
         window.contentView = NSHostingView(rootView: MainView(
             model: model,
             store: store,
+            updateManager: updateManager,
             onRetry: onRetry,
             onDeleteAllHistory: onDeleteAllHistory
         ))
@@ -114,6 +116,7 @@ final class MainWindowModel: ObservableObject {
 private struct MainView: View {
     @ObservedObject var model: MainWindowModel
     let store: HistoryStore?
+    let updateManager: AppUpdateManager
     let onRetry: (DictationRecord) -> Void
     let onDeleteAllHistory: () -> Void
 
@@ -173,7 +176,7 @@ private struct MainView: View {
             case .models:
                 ModelsPane().formStyle(.grouped)
             case .about:
-                AboutPane()
+                AboutPane(updateManager: updateManager)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1140,6 +1143,8 @@ struct APIConfigurationEditor: View {
 /// Who made this, what version it is, and where to go next. Deliberately a
 /// plain page rather than a Form: it is a colophon, not settings.
 struct AboutPane: View {
+    @ObservedObject var updateManager: AppUpdateManager
+
     /// Read from the bundle directly: NSApp.applicationIconImage is set at
     /// launch but the standard About panel ignores it for an LSUIElement app,
     /// which is exactly why this pane exists.
@@ -1182,6 +1187,52 @@ struct AboutPane: View {
                 Link("Report a bug", destination: JotLinks.issues)
             }
             .font(JotUI.TypeScale.body())
+
+            VStack(spacing: JotUI.Spacing.xs) {
+                Toggle(
+                    "Automatically check for updates",
+                    isOn: Binding(
+                        get: { updateManager.automaticallyChecks },
+                        set: { updateManager.setAutomaticallyChecks($0) }
+                    )
+                )
+                .toggleStyle(.checkbox)
+                .font(JotUI.TypeScale.body())
+
+                if !updateManager.automaticallyChecks {
+                    Button("Check for Updates") {
+                        updateManager.checkNow(userInitiated: true)
+                    }
+                    .controlSize(.small)
+                    .disabled(updateManager.isChecking || updateManager.isInstalling)
+                }
+
+                if let release = updateManager.availableUpdate {
+                    Button("Update to v\(release.version)…") {
+                        updateManager.promptAndInstall()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .disabled(updateManager.isInstalling)
+                }
+
+                if updateManager.isChecking || updateManager.isInstalling {
+                    HStack(spacing: 6) {
+                        ProgressView()
+                            .controlSize(.small)
+                        if let status = updateManager.statusMessage {
+                            Text(status)
+                                .font(JotUI.TypeScale.labelSmall())
+                                .foregroundStyle(JotUI.Colors.onSurfaceVariant)
+                        }
+                    }
+                } else if let status = updateManager.statusMessage, updateManager.availableUpdate == nil {
+                    Text(status)
+                        .font(JotUI.TypeScale.labelSmall())
+                        .foregroundStyle(JotUI.Colors.onSurfaceVariant)
+                }
+            }
+            .padding(.top, JotUI.Spacing.xs)
 
             Text("Open source under the Apache License 2.0.\nThis is not an officially supported Google product.")
                 .font(JotUI.TypeScale.labelSmall())

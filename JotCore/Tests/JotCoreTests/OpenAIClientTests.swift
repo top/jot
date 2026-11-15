@@ -354,4 +354,54 @@ final class OpenAIClientTests: XCTestCase {
             }
         }
     }
+
+    func testErrorMessageParsingCoversGateways() {
+        XCTAssertEqual(
+            OpenAIClient.errorMessage(from: Data(#"{"error":{"message":"Invalid model"}}"#.utf8)),
+            "Invalid model"
+        )
+        XCTAssertEqual(
+            OpenAIClient.errorMessage(from: Data(#"{"is_bifrost_error":false,"status_code":400,"error":{"error":"unsupported format","message":"failed to parse request"}}"#.utf8)),
+            "failed to parse request: unsupported format"
+        )
+        XCTAssertEqual(
+            OpenAIClient.errorMessage(from: Data(#"{"error":{"error":"same","message":"same"}}"#.utf8)),
+            "same"
+        )
+        XCTAssertEqual(
+            OpenAIClient.errorMessage(from: Data(#"{"detail":"FastAPI validation error"}"#.utf8)),
+            "FastAPI validation error"
+        )
+        XCTAssertEqual(
+            OpenAIClient.errorMessage(from: Data(#"{"error":"flat error"}"#.utf8)),
+            "flat error"
+        )
+        XCTAssertEqual(
+            OpenAIClient.errorMessage(from: Data(#"{"message":"top level"}"#.utf8)),
+            "top level"
+        )
+        XCTAssertEqual(
+            OpenAIClient.errorMessage(from: Data("  plain gateway rejection  ".utf8)),
+            "plain gateway rejection"
+        )
+        XCTAssertNil(OpenAIClient.errorMessage(from: Data("{}".utf8)))
+        XCTAssertNil(OpenAIClient.errorMessage(from: Data()))
+    }
+
+    func testEphemeralConfigurationDisablesPipeliningAndSharedState() {
+        let config = OpenAIClient.makeEphemeralConfiguration(timeoutForResource: 180)
+        XCTAssertFalse(config.httpShouldUsePipelining)
+        XCTAssertFalse(config.httpShouldSetCookies)
+        XCTAssertNil(config.httpCookieStorage)
+        XCTAssertNil(config.urlCache)
+        XCTAssertNil(config.urlCredentialStorage)
+        XCTAssertFalse(config.waitsForConnectivity)
+        XCTAssertEqual(config.timeoutIntervalForResource, 180)
+    }
+
+    func testTranscriptionServiceResetConnectionsDoesNotBreakReuse() {
+        let service = OpenAITranscriptionService()
+        service.resetConnections(forProviderId: "default")
+        service.resetConnections()
+    }
 }

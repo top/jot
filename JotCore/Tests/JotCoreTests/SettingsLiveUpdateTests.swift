@@ -23,7 +23,8 @@ final class SettingsLiveUpdateTests: XCTestCase {
 
     override func tearDown() {
         for key in ["showIdleIndicator", "soundsEnabled", "doubleTapLock", "gateTrips",
-                    "experimentalNoiseHandling", "smartCleanupPass", "openAIConfig", "automaticInsertion"] {
+                    "experimentalNoiseHandling", "smartCleanupPass", "openAIConfig", "automaticInsertion",
+                    "automaticallyChecksForUpdates", "lastUpdateCheckAt"] {
             UserDefaults.standard.removeObject(forKey: key)
         }
     }
@@ -55,6 +56,7 @@ final class SettingsLiveUpdateTests: XCTestCase {
         expectChange(forKey: "hotkeyKey") { settings.setHotkeyKey(.fn) }
         expectChange(forKey: "audioRetentionDays") { settings.setAudioRetentionDays(7) }
         expectChange(forKey: "experimentalNoiseHandling") { settings.setExperimentalNoiseHandling(true) }
+        expectChange(forKey: "automaticallyChecksForUpdates") { settings.setAutomaticallyChecksForUpdates(false) }
     }
 
     func testManualReEnableClearsGateTrips() {

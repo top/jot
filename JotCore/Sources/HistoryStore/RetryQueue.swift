@@ -28,6 +28,7 @@ public final class RetryQueue {
     private var lastPathSatisfied = false
 
     public var onDrained: ((Int) -> Void)?
+    public var onNetworkRestored: (() -> Void)?
     /// Fired once per blocked drain: the queue hit an account-level wall
     /// (auth/daily quota) — rows KEEP their queued promise and retry on the
     /// next external signal (launch, network flap, key change).
@@ -46,6 +47,7 @@ public final class RetryQueue {
                 let cameOnline = satisfied && !self.lastPathSatisfied
                 self.lastPathSatisfied = satisfied
                 if cameOnline {
+                    self.onNetworkRestored?()
                     Log.history.info("RetryQueue: network restored — draining")
                     await self.drain()
                 }
@@ -184,7 +186,7 @@ public final class RetryQueue {
                 meta.errorMessage = message
                 meta.write(to: folder)
                 store.upsert(meta: meta, folder: folder)
-                Log.history.warning("RetryQueue: permanent failure for \(meta.id, privacy: .public): \(message, privacy: .private)")
+                Log.history.warning("RetryQueue: permanent failure for \(meta.id, privacy: .public): \(message, privacy: .public)")
                 return .failed
             default:
                 meta.status = .failed

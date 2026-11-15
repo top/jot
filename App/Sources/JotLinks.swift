@@ -19,6 +19,7 @@ import Foundation
 enum JotLinks {
     static let author = URL(string: "https://x.com/ammaar")!
     static let repository = URL(string: "https://github.com/top/jot")!
+    static let latestReleaseAPI = URL(string: "https://api.github.com/repos/top/jot/releases/latest")!
     static let issues = URL(string: "https://github.com/top/jot/issues")!
     static let privacy = URL(string: "jot://settings/privacy")!
 }

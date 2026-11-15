@@ -30,6 +30,7 @@ final class DictationController {
     private let earcons = EarconPlayer()
     private let transcriptionService: OpenAITranscriptionService
     private let historyStore: HistoryStore?
+    let updateManager = AppUpdateManager()
     private var recoveryScanner: RecoveryScanner?
     private var retryQueue: RetryQueue?
     private var mainWindow: MainWindowController?
@@ -144,6 +145,7 @@ final class DictationController {
 
         bind()
         startHistoryServices()
+        updateManager.start()
 
         Timer.publish(every: 1, on: .main, in: .common)
             .autoconnect()
@@ -165,6 +167,13 @@ final class DictationController {
                     Log.session.info("system sleeping — finalizing active dictation")
                     self.coordinator.handle(.finalize)
                 }
+            }
+        }
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.transcriptionService.resetConnections()
             }
         }
 
@@ -283,7 +292,8 @@ final class DictationController {
             if !engineActive {
                 activateEngine()
             }
-        case "apiKey", "openAIConfig":
+        case "apiKey", "openAIConfig", "providers", "asrProviderId", "llmProviderId":
+            transcriptionService.resetConnections()
             if SettingsStore().apiConfigured {
                 // Covers the "I'll add it later" onboarding path, where the
                 // engine was never started: a key arriving in Settings must
@@ -327,6 +337,9 @@ final class DictationController {
         recoveryScanner = scanner
 
         let queue = RetryQueue(store: historyStore, transcription: transcriptionService)
+        queue.onNetworkRestored = { [weak self] in
+            self?.transcriptionService.resetConnections()
+        }
         queue.onDrained = { [weak self] count in
             let message = count == 1
                 ? "Your queued dictation is ready — it's in History"
@@ -386,6 +399,7 @@ final class DictationController {
         if mainWindow == nil {
             mainWindow = MainWindowController(
                 store: historyStore,
+                updateManager: updateManager,
                 onRetry: { [weak self] record in
                     Task { @MainActor [weak self] in
                         guard let self, let queue = self.retryQueue else { return }
@@ -638,7 +652,7 @@ final class DictationController {
             // Key/permission problems persist beyond the toast — the menu bar
             // icon carries the attention state until resolved (audit L12).
             onStatusItemState?(failure == .auth || failure == .modelAccess ? .attention : .idle)
-            showError(Self.copy(for: failure))
+            showError(Self.copy(for: failure, detail: coordinator.lastFailureMessage))
         }
     }
 
@@ -797,7 +811,7 @@ final class DictationController {
 
     // MARK: - Copy
 
-    private static func copy(for failure: DictationFailure) -> String {
+    private static func copy(for failure: DictationFailure, detail: String? = nil) -> String {
         switch failure {
         case .network: return "Couldn't reach your API — saved to History"
         case .auth:
@@ -806,7 +820,13 @@ final class DictationController {
                 : "API key isn't working — saved to History"
         case .modelAccess:
             return "Check the Base URL, model and permissions in Settings → Models. Saved to History"
-        case .badRequest: return "API rejected the request — saved to History"
+        case .badRequest:
+            if let raw = detail?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
+                let singleLine = raw.replacingOccurrences(of: "\n", with: " ")
+                let snippet = singleLine.count > 90 ? String(singleLine.prefix(90)) + "…" : singleLine
+                return "API rejected: \(snippet) — saved to History"
+            }
+            return "API rejected the request — saved to History"
         case .rateLimited: return "Rate limited — History will retry it shortly"
         case .noMicrophone: return "No microphone found — connect one to dictate"
         case .quotaExhausted: return "API quota exhausted — check your provider. Saved to History"

@@ -33,16 +33,19 @@ final class StatusItemController: NSObject {
     private let onOpenSettings: () -> Void
     private let onStartHandsFree: () -> Void
     private let onOpenAbout: () -> Void
+    private let onUpdateRequested: () -> Void
     private var animationTimer: Timer?
     private var frameIndex = 0
     private var state: VisualState = .idle
+    private var updateBadgeView: UpdateBadgeView?
 
     init(
         onOpenHistory: @escaping () -> Void,
         onPasteLast: @escaping () -> Void,
         onOpenSettings: @escaping () -> Void,
         onStartHandsFree: @escaping () -> Void,
-        onOpenAbout: @escaping () -> Void
+        onOpenAbout: @escaping () -> Void,
+        onUpdateRequested: @escaping () -> Void
     ) {
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         self.onOpenHistory = onOpenHistory
@@ -50,10 +53,12 @@ final class StatusItemController: NSObject {
         self.onOpenSettings = onOpenSettings
         self.onStartHandsFree = onStartHandsFree
         self.onOpenAbout = onOpenAbout
+        self.onUpdateRequested = onUpdateRequested
         super.init()
 
         statusItem.button?.image = Self.glyph(barHeights: Self.idleBars, dimmed: false)
         statusItem.button?.toolTip = "Jot"
+        installUpdateBadge()
         statusItem.menu = makeMenu()
     }
 
@@ -133,9 +138,51 @@ final class StatusItemController: NSObject {
     // MARK: - Menu
 
     private var statusLine: NSMenuItem?
+    private var updateMenuItem: NSMenuItem?
 
     func setStatusLine(_ text: String) {
         statusLine?.title = text
+    }
+
+    func setAvailableUpdate(_ release: UpdateRelease?) {
+        if let release {
+            updateBadgeView?.isHidden = false
+            updateMenuItem?.title = "Update Available (v\(release.version))…"
+            updateMenuItem?.isHidden = false
+        } else {
+            updateBadgeView?.isHidden = true
+            updateMenuItem?.isHidden = true
+        }
+    }
+
+    private func installUpdateBadge() {
+        guard let button = statusItem.button else { return }
+        let badge = UpdateBadgeView(image: Self.updateBadgeImage())
+        badge.translatesAutoresizingMaskIntoConstraints = false
+        badge.isHidden = true
+        button.addSubview(badge)
+        NSLayoutConstraint.activate([
+            badge.widthAnchor.constraint(equalToConstant: 9),
+            badge.heightAnchor.constraint(equalToConstant: 9),
+            badge.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -2),
+            badge.topAnchor.constraint(equalTo: button.topAnchor, constant: 2),
+        ])
+        updateBadgeView = badge
+    }
+
+    private static func updateBadgeImage() -> NSImage {
+        let size = NSSize(width: 9, height: 9)
+        let image = NSImage(size: size, flipped: false) { _ in
+            NSColor.systemRed.setFill()
+            NSBezierPath(ovalIn: NSRect(origin: .zero, size: size)).fill()
+
+            NSColor.white.setFill()
+            NSBezierPath(roundedRect: NSRect(x: 3.9, y: 3.6, width: 1.2, height: 3.7), xRadius: 0.6, yRadius: 0.6).fill()
+            NSBezierPath(ovalIn: NSRect(x: 3.9, y: 1.6, width: 1.2, height: 1.2)).fill()
+            return true
+        }
+        image.isTemplate = false
+        return image
     }
 
     private func makeMenu() -> NSMenu {
@@ -147,6 +194,12 @@ final class StatusItemController: NSObject {
         menu.addItem(status)
 
         menu.addItem(.separator())
+
+        let updateItem = NSMenuItem(title: "Update Available…", action: #selector(requestUpdate), keyEquivalent: "")
+        updateItem.target = self
+        updateItem.isHidden = true
+        updateMenuItem = updateItem
+        menu.addItem(updateItem)
 
         let handsFree = NSMenuItem(title: "Start Hands-Free Dictation", action: #selector(startHandsFree), keyEquivalent: "")
         handsFree.target = self
@@ -206,6 +259,10 @@ final class StatusItemController: NSObject {
         onOpenAbout()
     }
 
+    @objc private func requestUpdate() {
+        onUpdateRequested()
+    }
+
     @objc private func selectMicrophone(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? AudioDeviceID else { return }
         AudioInputDevices.setDefault(id: id)
@@ -238,4 +295,8 @@ extension StatusItemController: NSMenuDelegate {
         note.isEnabled = false
         menu.addItem(note)
     }
+}
+
+private final class UpdateBadgeView: NSImageView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }

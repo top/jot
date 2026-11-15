@@ -39,16 +39,28 @@ public actor OpenAIClient {
     private let ownsSession: Bool
     private let apiKey: String
 
+    public static func makeEphemeralConfiguration(timeoutForResource: TimeInterval = 300) -> URLSessionConfiguration {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.waitsForConnectivity = false
+        configuration.timeoutIntervalForResource = timeoutForResource
+        // Keep HTTP/2 multiplexing, but disable HTTP/1.1 pipelining (unsupported
+        // or rejected on POST by many reverse proxies and API gateways) and
+        // strip cookies/cache/credential jars so API requests stay stateless.
+        configuration.httpShouldUsePipelining = false
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieStorage = nil
+        configuration.urlCache = nil
+        configuration.urlCredentialStorage = nil
+        return configuration
+    }
+
     public init(apiKey: String, session: URLSession? = nil) {
         self.apiKey = apiKey
         if let session {
             self.session = session
             self.ownsSession = false
         } else {
-            let configuration = URLSessionConfiguration.ephemeral
-            configuration.waitsForConnectivity = false
-            configuration.timeoutIntervalForResource = 600
-            self.session = URLSession(configuration: configuration)
+            self.session = URLSession(configuration: Self.makeEphemeralConfiguration())
             self.ownsSession = true
         }
     }
@@ -210,8 +222,30 @@ public actor OpenAIClient {
     }
 
     static func errorMessage(from data: Data) -> String? {
-        let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-        return (object?["error"] as? [String: Any])?["message"] as? String
+        if let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+            if let errorDict = object["error"] as? [String: Any] {
+                let msg = nonEmpty(errorDict["message"] as? String)
+                let detail = nonEmpty(errorDict["error"] as? String)
+                if let msg, let detail, detail != msg {
+                    return "\(msg): \(detail)"
+                }
+                return msg ?? detail
+            }
+            return nonEmpty(object["error"] as? String)
+                ?? nonEmpty(object["detail"] as? String)
+                ?? nonEmpty(object["message"] as? String)
+        }
+        if let raw = nonEmpty(String(data: data, encoding: .utf8)) {
+            return String(raw.prefix(200))
+        }
+        return nil
+    }
+
+    private static func nonEmpty(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
     }
 
     struct DeadlineExceeded: Error {}

@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Builds an ad-hoc-signed universal app and an unnotarized DMG.
+# Builds an ad-hoc-signed universal app and an unnotarized ZIP.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -38,8 +38,10 @@ echo "▸ Ad-hoc signing"
 codesign --force --sign - --entitlements App/Jot.entitlements "$APP_PATH"
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
-echo "▸ Building DMG"
+echo "▸ Building ZIP"
 mkdir -p "$BUILD_DIR"
-rm -f "$BUILD_DIR"/Jot-*-UNNOTARIZED.dmg
+rm -f "$BUILD_DIR"/Jot-*-UNNOTARIZED.zip "$BUILD_DIR"/Jot-*-UNNOTARIZED.dmg
 VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Contents/Info.plist")
-scripts/make-dmg.sh "$APP_PATH" "$BUILD_DIR/Jot-$VERSION-UNNOTARIZED.dmg"
+ZIP_PATH="$BUILD_DIR/Jot-$VERSION-UNNOTARIZED.zip"
+ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ZIP_PATH"
+echo "✓ $ZIP_PATH ($(du -h "$ZIP_PATH" | cut -f1))"

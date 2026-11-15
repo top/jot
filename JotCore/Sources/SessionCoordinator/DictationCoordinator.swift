@@ -26,6 +26,7 @@ public final class DictationCoordinator: ObservableObject {
     @Published public private(set) var state: DictationState = .idle
     @Published public private(set) var micLevel: Float = 0
     @Published public private(set) var lastResult: String?
+    @Published public private(set) var lastFailureMessage: String?
     @Published public private(set) var coachingHint: String?
 
     /// "Delete All History" should also forget the paste-last buffer — a user
@@ -289,6 +290,7 @@ public final class DictationCoordinator: ObservableObject {
             Log.session.info("begin ignored: session already active (\(String(describing: self.state), privacy: .public))")
             return false
         }
+        lastFailureMessage = nil
         // F18: never record over a secure input field.
         if secureInputActive() {
             // Name the app holding it and say what to do. The flag is SYSTEM-WIDE,
@@ -791,6 +793,8 @@ public final class DictationCoordinator: ObservableObject {
         case .safetyBlocked: failure = .safetyBlocked; code = "safety"
         case nil: failure = .network; code = "unknown"
         }
+        lastFailureMessage = detail
+        Log.transcription.error("Transcription failed (\(code, privacy: .public)): \(detail ?? "none", privacy: .public)")
         updateMeta { $0.status = .failed; $0.errorCode = code; $0.errorMessage = detail }
         apply(.transcriptFailed(failure))
         session = nil

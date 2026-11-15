@@ -273,6 +273,22 @@ public struct SettingsStore: Sendable {
         Self.set(enabled, forKey: "soundsEnabled")
     }
 
+    public var automaticallyChecksForUpdates: Bool {
+        Self.defaults.object(forKey: "automaticallyChecksForUpdates") as? Bool ?? true
+    }
+
+    public func setAutomaticallyChecksForUpdates(_ enabled: Bool) {
+        Self.set(enabled, forKey: "automaticallyChecksForUpdates")
+    }
+
+    public var lastUpdateCheckAt: Date? {
+        Self.defaults.object(forKey: "lastUpdateCheckAt") as? Date
+    }
+
+    public func setLastUpdateCheckAt(_ date: Date) {
+        Self.defaults.set(date, forKey: "lastUpdateCheckAt")
+    }
+
     public var hotkeyKey: HotkeyKey {
         (Self.defaults.string(forKey: "hotkeyKey")).flatMap(HotkeyKey.init(rawValue:)) ?? .rightOption
     }

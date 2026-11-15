@@ -55,13 +55,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onPasteLast: { [weak controller] in controller?.pasteLastTranscript() },
             onOpenSettings: { [weak controller] in controller?.openSettings() },
             onStartHandsFree: { [weak controller] in controller?.startHandsFree() },
-            onOpenAbout: { [weak controller] in controller?.openSettings(section: "about") }
+            onOpenAbout: { [weak controller] in controller?.openSettings(section: "about") },
+            onUpdateRequested: { [weak controller] in controller?.updateManager.promptAndInstall() }
         )
         controller.onStatusChange = { [weak self] status in
             self?.statusItemController?.setStatusLine(status)
         }
         controller.onStatusItemState = { [weak self] state in
             self?.statusItemController?.setState(state)
+        }
+        controller.updateManager.onAvailableUpdateChanged = { [weak self] release in
+            self?.statusItemController?.setAvailableUpdate(release)
         }
         controller.start()
         dictationController = controller

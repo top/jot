@@ -62,14 +62,12 @@ ASR service; explicit misspelling replacements are always applied locally.
 
 ## Install
 
-1. Download the latest `Jot-x.y.z-UNNOTARIZED.dmg` from [Releases](../../releases/latest).
-2. Drag Jot into **Applications** and launch it from there — apps run from a
-   mounted disk image are sandboxed by macOS and the permissions you grant will
-   not stick.
+1. Download the latest `Jot-x.y.z-UNNOTARIZED.zip` from [Releases](../../releases/latest).
+2. Unzip it and move `Jot.app` into **Applications** before launching — apps
+   run from Downloads or read-only locations may be translocated by macOS so
+   permissions and automatic updates will not work.
 
-<div align="center">
-<img src="docs/images/installer.png" width="480" alt="Drag Jot to Applications">
-</div>
+In-app updates check GitHub Releases once a day by default (configurable in Settings → About).
 
 Setup takes about two minutes and the app walks you through it:
 
@@ -195,7 +193,7 @@ JotCore/        all engine logic, headless and testable
   FormattingPipeline/   cleanup prompt, validation gate, dictionary rules
   InsertionEngine/      the AX → paste → clipboard ladder
   HistoryStore/         GRDB index, recovery, retry queue, retention
-scripts/        build, test, icon, DMG, release
+scripts/        build, test, icon, release
 docs/           privacy, releasing, design specs, research
 ```
 
@@ -214,7 +212,7 @@ Transcript text is logged as `private` and never appears in those logs.
 
 ### Releasing
 
-Push a `v*` tag to build and publish an unnotarized universal DMG through GitHub
+Push a `v*` tag to build and publish an unnotarized universal ZIP through GitHub
 Actions, or run the Release workflow manually to download a test artifact.
 No Apple Developer account or signing secrets are needed. Gatekeeper may block
 the first launch. See [docs/RELEASING.md](docs/RELEASING.md) for installation

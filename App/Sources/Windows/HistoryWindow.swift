@@ -254,21 +254,33 @@ struct HistoryPane: View {
 
     private func attentionRow(_ record: DictationRecord) -> some View {
         HStack(spacing: JotUI.Spacing.s) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(attentionTitle(record))
-                    .font(JotUI.TypeScale.body(grad: grad))
-                    .foregroundStyle(.primary)
-                HStack(spacing: JotUI.Spacing.xs) {
-                    if let app = record.targetAppName { Text(app) }
-                    if let duration = record.durationSeconds {
-                        Text(String(format: "%.0fs of audio", duration))
+            Button {
+                detailRecord = record
+            } label: {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(attentionTitle(record))
+                        .font(JotUI.TypeScale.body(grad: grad))
+                        .foregroundStyle(.primary)
+                    if let error = record.errorMessage, !error.isEmpty {
+                        Text(error)
+                            .font(JotUI.TypeScale.labelSmall(grad: grad))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
                     }
-                    Text(record.startedAt.formatted(date: .abbreviated, time: .shortened))
+                    HStack(spacing: JotUI.Spacing.xs) {
+                        if let app = record.targetAppName { Text(app) }
+                        if let duration = record.durationSeconds {
+                            Text(String(format: "%.0fs of audio", duration))
+                        }
+                        Text(record.startedAt.formatted(date: .abbreviated, time: .shortened))
+                    }
+                    .font(JotUI.TypeScale.labelSmall(grad: grad))
+                    .foregroundStyle(.secondary)
                 }
-                .font(JotUI.TypeScale.labelSmall(grad: grad))
-                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            Spacer()
+            .buttonStyle(.plain)
             // Retry needs something to retry: no audio and no transcript is a
             // dead-end button that can only re-fail (production pass 2).
             if audioExists(record) || record.rawTranscript != nil {
