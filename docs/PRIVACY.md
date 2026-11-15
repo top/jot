@@ -14,7 +14,7 @@ Everything else stays on your Mac. The code is open — verify all of this.
   them as recognition hints; support and effectiveness depend on the service. Only the correct
    spellings are sent — never the misspellings you record. They ride on every
   dictation.
-3. **The formatting prompt**, *only if* "Polish text and match app tone" is on
+3. **The formatting prompt**, *only if* "Enable Text Polish & Tone" is on
    in Settings → Models — off by default. It contains the transcript being
    formatted, the formatting rules, a coarse tone category derived from the
    frontmost app's *category* (e.g. "chat message"), and your dictionary terms.

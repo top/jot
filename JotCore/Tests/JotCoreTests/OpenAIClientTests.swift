@@ -148,18 +148,7 @@ final class OpenAIClientTests: XCTestCase {
         XCTAssertEqual(models, ["qwen-2.5-7b", "whisper-large-v3"])
     }
 
-    func testCleanupFailurePreservesTranscriptAndDeletesTemporaryWAV() async throws {
-        let defaults = UserDefaults.standard
-        let keys = ["openAIConfig", "smartCleanupPass", "gateTrips", "dictionaryEntries"]
-        let original = keys.map { defaults.object(forKey: $0) }
-        defer { for (key, value) in zip(keys, original) { defaults.set(value, forKey: key) } }
-        defaults.removeObject(forKey: "dictionaryEntries")
-        let settings = SettingsStore()
-        settings.setAPIConfig(OpenAIConfig(baseURL: "http://localhost:8000/v1", asrModel: "asr", llmModel: "llm"))
-        settings.setSmartCleanupPass(true)
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: folder) }
+    private func makeTestCAF(in folder: URL) throws -> URL {
         let format = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16_000, channels: 1, interleaved: true)!
         let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1600)!
         buffer.frameLength = 1600
@@ -168,18 +157,131 @@ final class OpenAIClientTests: XCTestCase {
         let writer = try CAFWriter(url: cafURL, format: format)
         try writer.write(buffer)
         writer.close()
-        let service = OpenAITranscriptionService(settings: settings, session: session { request in
-            if request.url?.path == "/v1/audio/transcriptions" {
-                return (200, Data(#"{"text":"Original words."}"#.utf8))
+        return cafURL
+    }
+
+    private func withIsolatedTranscriptionSettings(_ body: (SettingsStore) async throws -> Void) async throws {
+        let defaults = UserDefaults.standard
+        let keys = ["apiProviders", "asrProviderId", "llmProviderId", "openAIConfig", "smartCleanupPass", "gateTrips", "dictionaryEntries"]
+        let original = keys.map { defaults.object(forKey: $0) }
+        defer { for (key, value) in zip(keys, original) { defaults.set(value, forKey: key) } }
+        for key in keys { defaults.removeObject(forKey: key) }
+        try await body(SettingsStore())
+    }
+
+    func testCleanupFailurePreservesTranscriptAndDeletesTemporaryWAV() async throws {
+        try await withIsolatedTranscriptionSettings { settings in
+            settings.setAPIConfig(OpenAIConfig(baseURL: "http://localhost:8000/v1", asrModel: "asr", llmModel: "llm"))
+            settings.setSmartCleanupPass(true)
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: folder) }
+            let cafURL = try makeTestCAF(in: folder)
+            let service = OpenAITranscriptionService(settings: settings, session: session { request in
+                if request.url?.path == "/v1/audio/transcriptions" {
+                    return (200, Data(#"{"text":"Original words."}"#.utf8))
+                }
+                XCTAssertEqual(request.url?.path, "/v1/chat/completions")
+                return (503, Data())
+            }, apiKey: { "test-key" })
+            let result = try await service.transcribe(audioURL: cafURL, durationSeconds: 0.1, context: DictationContext())
+            XCTAssertEqual(result.rawTranscript, "Original words.")
+            XCTAssertEqual(result.cleanedTranscript, "Original words.")
+            XCTAssertTrue(FileManager.default.fileExists(atPath: cafURL.path))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appendingPathComponent("audio.wav").path))
+        }
+    }
+
+    func testSharedSessionRemainsValidAcrossRepeatedTranscriptions() async throws {
+        try await withIsolatedTranscriptionSettings { settings in
+            settings.setAPIConfig(OpenAIConfig(baseURL: "http://localhost:8000/v1", asrModel: "asr", llmModel: "llm"))
+            settings.setSmartCleanupPass(true)
+
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: folder) }
+            let cafURL = try makeTestCAF(in: folder)
+
+            let sharedSession = session { request in
+                if request.url?.path == "/v1/audio/transcriptions" {
+                    return (200, Data(#"{"text":"Hello world."}"#.utf8))
+                }
+                XCTAssertEqual(request.url?.path, "/v1/chat/completions")
+                return (200, Data(#"{"choices":[{"message":{"content":"Hello world."},"finish_reason":"stop"}]}"#.utf8))
             }
-            XCTAssertEqual(request.url?.path, "/v1/chat/completions")
-            return (503, Data())
-        }, apiKey: { "test-key" })
-        let result = try await service.transcribe(audioURL: cafURL, durationSeconds: 0.1, context: DictationContext())
-        XCTAssertEqual(result.rawTranscript, "Original words.")
-        XCTAssertEqual(result.cleanedTranscript, "Original words.")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: cafURL.path))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appendingPathComponent("audio.wav").path))
+            defer { sharedSession.invalidateAndCancel() }
+
+            let service = OpenAITranscriptionService(settings: settings, session: sharedSession, apiKey: { "test-key" })
+            let first = try await service.transcribe(audioURL: cafURL, durationSeconds: 0.1, context: DictationContext())
+            let second = try await service.transcribe(audioURL: cafURL, durationSeconds: 0.1, context: DictationContext())
+            XCTAssertEqual(first.cleanedTranscript, "Hello world.")
+            XCTAssertEqual(second.cleanedTranscript, "Hello world.")
+        }
+    }
+
+    func testDisabledCleanupSkipsLLMAndReturnsASRTranscriptDirectly() async throws {
+        try await withIsolatedTranscriptionSettings { settings in
+            settings.setAPIConfig(OpenAIConfig(baseURL: "http://localhost:8000/v1", asrModel: "asr-only", llmModel: "unused-llm"))
+            settings.setSmartCleanupPass(false)
+
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: folder) }
+            let cafURL = try makeTestCAF(in: folder)
+
+            var asrCalls = 0
+            var llmCalls = 0
+            let sharedSession = session { request in
+                if request.url?.path == "/v1/audio/transcriptions" {
+                    asrCalls += 1
+                    return (200, Data(#"{"text":"  Um, raw ASR transcript.  "}"#.utf8))
+                }
+                llmCalls += 1
+                return (500, Data())
+            }
+            defer { sharedSession.invalidateAndCancel() }
+
+            let service = OpenAITranscriptionService(settings: settings, session: sharedSession, apiKey: { "test-key" })
+            let first = try await service.transcribe(audioURL: cafURL, durationSeconds: 0.1, context: DictationContext())
+            let second = try await service.transcribe(audioURL: cafURL, durationSeconds: 0.1, context: DictationContext())
+
+            XCTAssertEqual(asrCalls, 2)
+            XCTAssertEqual(llmCalls, 0)
+            XCTAssertEqual(first.rawTranscript, "Um, raw ASR transcript.")
+            XCTAssertEqual(first.cleanedTranscript, "Um, raw ASR transcript.")
+            XCTAssertEqual(first.modelID, "asr-only")
+            XCTAssertEqual(second.cleanedTranscript, "Um, raw ASR transcript.")
+        }
+    }
+
+    func testEmptyLLMModelSkipsLLMAndReturnsASRTranscriptDirectly() async throws {
+        try await withIsolatedTranscriptionSettings { settings in
+            settings.setAPIConfig(OpenAIConfig(baseURL: "http://localhost:8000/v1", asrModel: "asr-only", llmModel: ""))
+            settings.setSmartCleanupPass(true)
+
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: folder) }
+            let cafURL = try makeTestCAF(in: folder)
+
+            var llmCalls = 0
+            let sharedSession = session { request in
+                if request.url?.path == "/v1/audio/transcriptions" {
+                    return (200, Data(#"{"text":"Direct ASR text."}"#.utf8))
+                }
+                llmCalls += 1
+                return (500, Data())
+            }
+            defer { sharedSession.invalidateAndCancel() }
+
+            let service = OpenAITranscriptionService(settings: settings, session: sharedSession, apiKey: { "test-key" })
+            let result = try await service.transcribe(audioURL: cafURL, durationSeconds: 0.1, context: DictationContext())
+
+            XCTAssertEqual(llmCalls, 0)
+            XCTAssertEqual(result.rawTranscript, "Direct ASR text.")
+            XCTAssertEqual(result.cleanedTranscript, "Direct ASR text.")
+            XCTAssertEqual(result.modelID, "asr-only")
+        }
     }
 
     func testWAVExportPreservesPCMFrames() throws {

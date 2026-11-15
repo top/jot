@@ -36,17 +36,20 @@ public struct OpenAIConfig: Sendable, Equatable {
 
 public actor OpenAIClient {
     private let session: URLSession
+    private let ownsSession: Bool
     private let apiKey: String
 
     public init(apiKey: String, session: URLSession? = nil) {
         self.apiKey = apiKey
         if let session {
             self.session = session
+            self.ownsSession = false
         } else {
             let configuration = URLSessionConfiguration.ephemeral
             configuration.waitsForConnectivity = false
             configuration.timeoutIntervalForResource = 600
             self.session = URLSession(configuration: configuration)
+            self.ownsSession = true
         }
     }
 
@@ -226,5 +229,9 @@ public actor OpenAIClient {
         }
     }
 
-    deinit { session.invalidateAndCancel() }
+    deinit {
+        if ownsSession {
+            session.invalidateAndCancel()
+        }
+    }
 }
