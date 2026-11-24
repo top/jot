@@ -94,7 +94,8 @@ final class DictationCoordinatorTests: XCTestCase {
     private func makeCoordinator(
         transcription: FakeTranscription = FakeTranscription(),
         noiseHandling: Bool = false,
-        secureInput: Bool = false
+        secureInput: Bool = false,
+        recordingCapSeconds: TimeInterval? = nil
     ) -> DictationCoordinator {
         capture = FakeCapture()
         inserter = FakeInserter()
@@ -110,7 +111,8 @@ final class DictationCoordinatorTests: XCTestCase {
             // Never read the host's real secure-input state: it is system-wide,
             // and a stuck loginwindow or Terminal's Secure Keyboard Entry would
             // fail every begin-a-session test for reasons unrelated to the code.
-            secureInputActive: { secureInput }
+            secureInputActive: { secureInput },
+            recordingCapSeconds: recordingCapSeconds
         )
         lastCoordinator = coordinator
         return coordinator
@@ -497,6 +499,24 @@ final class DictationCoordinatorTests: XCTestCase {
         let stateBefore = c.state
         c.handle(.begin)
         XCTAssertEqual(c.state, stateBefore)
+    }
+
+    func testRecordingCapConstantsMatchThreeMinuteWindow() {
+        XCTAssertEqual(DictationCoordinator.recordingWarnSeconds, 150)
+        XCTAssertEqual(DictationCoordinator.recordingCapSeconds, 180)
+    }
+
+    func testRecordingCapAutoFinalizesWithoutTrailingCapture() async {
+        let c = makeCoordinator(recordingCapSeconds: 0.05)
+        c.handle(.begin)
+        await pump()
+        capture.onLevel?(0.8) // mid-speech when the hard cap fires
+        await pump()
+        try? await Task.sleep(nanoseconds: 120_000_000)
+        await settle()
+        XCTAssertEqual(capture.stopCount, 1, "cap stop must not stall in trailing capture")
+        XCTAssertEqual(c.state, .done(.inserted))
+        XCTAssertNil(c.coachingHint, "countdown lives on the pill rather than replacing it with a notice")
     }
 
     func testNewSessionAfterCompletion() async {

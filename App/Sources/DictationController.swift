@@ -606,6 +606,7 @@ final class DictationController {
             onStatusItemState?(.listening)
 
         case .finalizing:
+            engine.resetGrammar()
             earcons.play(.stop)
             stopElapsedTimer()
             setPill(.processing)
@@ -646,6 +647,7 @@ final class DictationController {
             setPill(.idleDot)
 
         case .failed(let failure):
+            engine.resetGrammar()
             clearSlowTimer()
             stopElapsedTimer()
             earcons.play(.error)
@@ -760,8 +762,8 @@ final class DictationController {
         dismissTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             guard !Task.isCancelled, let self else { return }
-            // Re-derive from coordinator state — a hardcoded .idleDot after the
-            // 9-min cap warning stranded a HOT MIC behind the resting dot
+            // Re-derive from coordinator state — a hardcoded .idleDot after a
+            // mid-session notice stranded a HOT MIC behind the resting dot
             // (production pass 2, P0). Terminal/idle states still land on the dot.
             self.setPill(Self.restingPill(for: self.coordinator.state))
         }
@@ -781,7 +783,7 @@ final class DictationController {
     private func startElapsedTimer() {
         hud.model.elapsed = 0
         elapsedTimer?.invalidate()
-        elapsedTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+        elapsedTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self, let startedAt = self.sessionStartedAt else { return }
                 self.hud.model.elapsed = Date().timeIntervalSince(startedAt)

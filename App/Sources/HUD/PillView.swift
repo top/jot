@@ -63,13 +63,12 @@ struct PillView: View {
                         Image(systemName: "lock.fill")
                             .font(.system(size: 11))
                             .foregroundStyle(JotUI.Colors.onSurfaceVariant)
-                        Text(timerText)
+                    }
+                    if isCountingDown {
+                        Text(countdownText)
                             .font(JotUI.TypeScale.numeric())
-                            .foregroundStyle(JotUI.Colors.onSurfaceVariant)
-                    } else if model.elapsed >= 10 {
-                        Text(timerText)
-                            .font(JotUI.TypeScale.numeric())
-                            .foregroundStyle(JotUI.Colors.onSurfaceVariant)
+                            .foregroundStyle(remainingSeconds <= 10 ? JotUI.Colors.error : JotUI.Colors.onSurfaceVariant)
+                            .transition(.opacity)
                     }
                     WaveformView(level: model.level, processing: false)
                     if !model.partial.isEmpty {
@@ -90,6 +89,7 @@ struct PillView: View {
                         stopButton
                     }
                 }
+                .animation(reduceMotion ? .linear(duration: 0.15) : JotMotion.defaultSpatial, value: isCountingDown)
             }
 
         case .processing:
@@ -233,9 +233,16 @@ struct PillView: View {
         .modifier(ShakeEffect(shakes: reduceMotion ? 0 : 3))
     }
 
-    private var timerText: String {
-        let seconds = Int(model.elapsed)
-        return String(format: "%d:%02d", seconds / 60, seconds % 60)
+    private var isCountingDown: Bool {
+        model.elapsed >= DictationCoordinator.recordingWarnSeconds
+    }
+
+    private var remainingSeconds: Int {
+        max(0, Int(ceil(DictationCoordinator.recordingCapSeconds - model.elapsed)))
+    }
+
+    private var countdownText: String {
+        String(format: "%d:%02d", remainingSeconds / 60, remainingSeconds % 60)
     }
 
     private var accessibilityDescription: String {

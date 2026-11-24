@@ -79,11 +79,10 @@ public final class DictationCoordinator: ObservableObject {
     /// room. This clause can only ever prevent a discard, never cause one.
     static let discardSNRThreshold: Double = 6
 
-    /// F20: soft warning at 9:00, hard stop + transcribe at 10:00.
-    static let recordingWarnSeconds: TimeInterval = 540
-    static let recordingCapSeconds: TimeInterval = 600
+    /// F20: soft warning (HUD countdown) at 2:30, hard stop + transcribe at 3:00.
+    public static let recordingWarnSeconds: TimeInterval = 150
+    public static let recordingCapSeconds: TimeInterval = 180
 
-    private var capWarnTask: Task<Void, Never>?
     private var capStopTask: Task<Void, Never>?
     /// The in-flight transcription task — cancelled when the user cancels the
     /// session (audit L8: Esc previously left the network work running).
@@ -184,6 +183,7 @@ public final class DictationCoordinator: ObservableObject {
     /// Injected so the coordinator never needs to know about sockets or keys,
     /// and so tests can drive every live failure mode with no network.
     private let makeLiveSession: @MainActor () -> LiveTranscribing?
+    private let recordingCapSeconds: TimeInterval
 
     public init(
         audioFactory: @escaping @MainActor () -> AudioCapturing,
@@ -193,7 +193,8 @@ public final class DictationCoordinator: ObservableObject {
         now: @escaping () -> Date = Date.init,
         noiseHandlingEnabled: @escaping @MainActor () -> Bool = { SettingsStore().experimentalNoiseHandling },
         secureInputActive: @escaping @MainActor () -> Bool = { SecureInput.isActive },
-        makeLiveSession: @escaping @MainActor () -> LiveTranscribing? = { nil }
+        makeLiveSession: @escaping @MainActor () -> LiveTranscribing? = { nil },
+        recordingCapSeconds: TimeInterval? = nil
     ) {
         self.audioFactory = audioFactory
         self.transcription = transcription
@@ -203,6 +204,7 @@ public final class DictationCoordinator: ObservableObject {
         self.noiseHandlingEnabled = noiseHandlingEnabled
         self.makeLiveSession = makeLiveSession
         self.secureInputActive = secureInputActive
+        self.recordingCapSeconds = recordingCapSeconds ?? Self.recordingCapSeconds
     }
 
     // MARK: - Hotkey entry point
@@ -443,28 +445,18 @@ public final class DictationCoordinator: ObservableObject {
     // MARK: - Recording cap (F20) & disk failure (F22)
 
     private func startCapTimers() {
-        capWarnTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(Self.recordingWarnSeconds * 1_000_000_000))
-            guard !Task.isCancelled else { return }
-            await MainActor.run { [weak self] in
-                if case .recording = self?.state {
-                    self?.coachingHint = "One minute left — 10-minute limit"
-                }
-            }
-        }
-        capStopTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(Self.recordingCapSeconds * 1_000_000_000))
+        capStopTask = Task { [weak self, recordingCapSeconds] in
+            try? await Task.sleep(nanoseconds: UInt64(recordingCapSeconds * 1_000_000_000))
             guard !Task.isCancelled else { return }
             await MainActor.run { [weak self] in
                 guard let self, case .recording = self.state else { return }
                 Log.session.info("recording cap reached — finalizing")
-                self.finalizeSession()
+                self.finalizeSession(allowTrailingCapture: false)
             }
         }
     }
 
     private func stopCapTimers() {
-        capWarnTask?.cancel(); capWarnTask = nil
         capStopTask?.cancel(); capStopTask = nil
     }
 
@@ -516,7 +508,7 @@ public final class DictationCoordinator: ObservableObject {
         return min(Self.trailingRelativeCap, max(Self.trailingSpeechThreshold, relative))
     }
 
-    private func finalizeSession() {
+    private func finalizeSession(allowTrailingCapture: Bool = true) {
         guard session != nil else { return }
         // The machine decides first; side effects only on an ACCEPTED finalize
         // (same pattern as cancelSession, audit #10). A second stop while a
@@ -529,7 +521,7 @@ public final class DictationCoordinator: ObservableObject {
         // pill is already showing .finalizing, so the wait is visually covered.
         let engine = capture
         capture = nil
-        let wasSpeaking = latestLevel >= currentTrailingThreshold()
+        let wasSpeaking = allowTrailingCapture && latestLevel >= currentTrailingThreshold()
         micLevel = 0
         Task { @MainActor [weak self] in
             if wasSpeaking, let engine {
